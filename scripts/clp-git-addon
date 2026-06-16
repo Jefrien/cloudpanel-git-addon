@@ -19,6 +19,9 @@ WEBHOOK_HOOKS="$WEBHOOK_CONFIG_DIR/webhook-hooks.json"
 WEBHOOK_SERVICE="/etc/systemd/system/clp-git-webhook.service"
 WEBHOOK_PORT="9000"
 
+VERSION_FILE="$ADDON_DIR/VERSION"
+VERSION=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -283,7 +286,7 @@ uninstall_webhook() {
 
 cmd_install() {
     check_root
-    echo "Installing CloudPanel Git Addon..."
+    echo "Installing CloudPanel Git Addon v$VERSION..."
     echo ""
 
     if [ ! -d "$ADDON_DIR" ]; then
