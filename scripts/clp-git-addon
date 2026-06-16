@@ -2,7 +2,7 @@
 set -e
 
 # CloudPanel Git Addon - Git Management
-# https://github.com/... (TODO: add repo URL)
+# https://github.com/Jefrien/cloudpanel-git-addon
 
 ADDON_DIR="/opt/clp-git-addon"
 CLP_APP="/home/clp/htdocs/app/files"
@@ -11,6 +11,13 @@ CLP_CONTROLLERS="$CLP_APP/src/Controller/Frontend"
 CLP_CSS="$CLP_APP/public/assets/css/frontend"
 CLP_ROUTES="$CLP_APP/config/routes.yaml"
 TAB_TEMPLATE="$CLP_TEMPLATES/Partial/tab-container.html.twig"
+
+WEBHOOK_DIR="$ADDON_DIR/bin"
+WEBHOOK_BIN="$WEBHOOK_DIR/webhook"
+WEBHOOK_CONFIG_DIR="$ADDON_DIR/config"
+WEBHOOK_HOOKS="$WEBHOOK_CONFIG_DIR/webhook-hooks.json"
+WEBHOOK_SERVICE="/etc/systemd/system/clp-git-webhook.service"
+WEBHOOK_PORT="9000"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -31,6 +38,13 @@ check_root() {
 is_patched() {
     grep -q "clp_site_git" "$CLP_ROUTES" 2>/dev/null && \
     grep -q "'git'" "$TAB_TEMPLATE" 2>/dev/null
+}
+
+is_webhook_installed() {
+    [ -f "$WEBHOOK_BIN" ] && \
+    [ -f "$WEBHOOK_HOOKS" ] && \
+    [ -f "$WEBHOOK_SERVICE" ] && \
+    systemctl is-active --quiet clp-git-webhook.service 2>/dev/null
 }
 
 patch_tab_container() {
@@ -114,6 +128,133 @@ HOOK
     log_ok "APT hook installed at $hook_file"
 }
 
+install_webhook_binary() {
+    if [ -f "$WEBHOOK_BIN" ]; then
+        log_ok "Webhook binary already present at $WEBHOOK_BIN"
+        return 0
+    fi
+
+    echo "Downloading latest webhook release from GitHub..."
+
+    local asset_url
+    asset_url=$(curl -sL https://api.github.com/repos/adnanh/webhook/releases/latest | \
+        grep '"browser_download_url":' | \
+        grep 'linux-amd64.tar.gz' | \
+        head -1 | \
+        sed -E 's/.*"browser_download_url": "([^"]+)".*/\1/')
+
+    if [ -z "$asset_url" ]; then
+        log_err "Could not determine latest webhook download URL"
+        return 1
+    fi
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    local tarball="$tmp_dir/webhook.tar.gz"
+
+    curl -sL "$asset_url" -o "$tarball"
+
+    if [ ! -s "$tarball" ]; then
+        log_err "Failed to download webhook tarball"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    mkdir -p "$WEBHOOK_DIR"
+    tar xzf "$tarball" -C "$tmp_dir"
+
+    # The tarball contains a single binary named 'webhook'
+    if [ -f "$tmp_dir/webhook" ]; then
+        cp "$tmp_dir/webhook" "$WEBHOOK_BIN"
+    else
+        log_err "Could not find webhook binary in downloaded archive"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    chmod +x "$WEBHOOK_BIN"
+    rm -rf "$tmp_dir"
+
+    # Symlink into /usr/local/bin so it's available in PATH
+    ln -sf "$WEBHOOK_BIN" /usr/local/bin/webhook
+
+    log_ok "Webhook binary installed at $WEBHOOK_BIN"
+}
+
+install_webhook_hooks() {
+    mkdir -p "$WEBHOOK_CONFIG_DIR"
+
+    if [ -f "$WEBHOOK_HOOKS" ]; then
+        log_ok "Webhook hooks file already present at $WEBHOOK_HOOKS"
+        return 0
+    fi
+
+    cat > "$WEBHOOK_HOOKS" << 'HOOKS'
+[]
+HOOKS
+
+    chown clp:clp "$WEBHOOK_HOOKS"
+    chmod 640 "$WEBHOOK_HOOKS"
+
+    log_ok "Empty webhook hooks file created at $WEBHOOK_HOOKS"
+}
+
+install_webhook_service() {
+    local service_changed=false
+
+    cat > "$WEBHOOK_SERVICE" << SERVICE
+[Unit]
+Description=CloudPanel Git Addon Webhook
+After=network.target
+
+[Service]
+Type=simple
+User=clp
+Group=clp
+ExecStart=$WEBHOOK_BIN -hooks $WEBHOOK_HOOKS -port $WEBHOOK_PORT
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+    systemctl daemon-reload
+
+    if systemctl is-enabled --quiet clp-git-webhook.service 2>/dev/null; then
+        log_ok "Webhook service already enabled"
+    else
+        systemctl enable clp-git-webhook.service
+        log_ok "Webhook service enabled"
+    fi
+
+    if systemctl is-active --quiet clp-git-webhook.service 2>/dev/null; then
+        systemctl restart clp-git-webhook.service
+        log_ok "Webhook service restarted"
+    else
+        systemctl start clp-git-webhook.service
+        log_ok "Webhook service started"
+    fi
+}
+
+uninstall_webhook() {
+    if systemctl is-active --quiet clp-git-webhook.service 2>/dev/null; then
+        systemctl stop clp-git-webhook.service
+    fi
+
+    if systemctl is-enabled --quiet clp-git-webhook.service 2>/dev/null; then
+        systemctl disable clp-git-webhook.service
+    fi
+
+    rm -f "$WEBHOOK_SERVICE"
+    rm -f "$WEBHOOK_BIN"
+    rm -f /usr/local/bin/webhook
+    rm -f "$WEBHOOK_HOOKS"
+
+    systemctl daemon-reload
+
+    log_ok "Webhook service and binary removed"
+}
+
 cmd_install() {
     check_root
     echo "Installing CloudPanel Git Addon..."
@@ -135,6 +276,9 @@ cmd_install() {
     patch_routes
     clear_cache
     install_apt_hook
+    install_webhook_binary
+    install_webhook_hooks
+    install_webhook_service
 
     # Install this script to /usr/local/bin
     cp "$ADDON_DIR/scripts/clp-git-addon" /usr/local/bin/clp-git-addon
@@ -155,7 +299,8 @@ cmd_repair() {
     # Quick idempotency check - exit fast if already patched
     if is_patched && \
        [ -f "$CLP_CONTROLLERS/GitController.php" ] && \
-       [ -f "$CLP_TEMPLATES/git.html.twig" ]; then
+       [ -f "$CLP_TEMPLATES/git.html.twig" ] && \
+       is_webhook_installed; then
         $quiet || log_ok "All patches intact, nothing to repair."
         return 0
     fi
@@ -171,6 +316,9 @@ cmd_repair() {
     patch_tab_container
     patch_routes
     clear_cache
+    install_webhook_binary
+    install_webhook_hooks
+    install_webhook_service
 
     $quiet || log_ok "Repair complete!"
 }
@@ -215,6 +363,32 @@ cmd_check() {
         log_warn "APT hook not installed"
     fi
 
+    if [ -f "$WEBHOOK_BIN" ]; then
+        log_ok "Webhook binary present"
+    else
+        log_err "Webhook binary MISSING"
+        all_ok=false
+    fi
+
+    if [ -f "$WEBHOOK_HOOKS" ]; then
+        log_ok "Webhook hooks file present"
+    else
+        log_err "Webhook hooks file MISSING"
+        all_ok=false
+    fi
+
+    if [ -f "$WEBHOOK_SERVICE" ]; then
+        if systemctl is-active --quiet clp-git-webhook.service 2>/dev/null; then
+            log_ok "Webhook service is running"
+        else
+            log_err "Webhook service is NOT running"
+            all_ok=false
+        fi
+    else
+        log_err "Webhook service file MISSING"
+        all_ok=false
+    fi
+
     echo ""
     if $all_ok; then
         log_ok "Everything looks good!"
@@ -239,6 +413,9 @@ cmd_uninstall() {
 
     # Remove APT hook
     rm -f /etc/apt/apt.conf.d/99-clp-git-addon
+
+    # Remove webhook service and binary
+    uninstall_webhook
 
     # Clear cache
     clear_cache
