@@ -630,6 +630,24 @@ EOF\'',
     }
 
     /**
+     * Check whether the deploy path is empty or does not exist yet
+     *
+     * @param string $deployPath The path to check
+     * @param string $domainName The site domain name
+     * @return bool True if the path does not exist or is an empty directory
+     */
+    private function isDeployPathEmpty(string $deployPath, string $domainName): bool
+    {
+        $this->initConfig($domainName);
+        $output = $this->runAsUser(
+            "if [ ! -e " . escapeshellarg($deployPath) . " ]; then echo EMPTY; " .
+            "elif [ -d " . escapeshellarg($deployPath) . " ] && [ -z \"\$(ls -A " . escapeshellarg($deployPath) . ")\" ]; then echo EMPTY; " .
+            "else echo NOT_EMPTY; fi"
+        );
+        return trim($output) === 'EMPTY';
+    }
+
+    /**
      * Clone a repository into the deploy path as the site user
      *
      * @param string $repoUrl The repository URL
@@ -640,6 +658,20 @@ EOF\'',
     private function cloneRepo(string $repoUrl, string $deployPath, string $domainName): array
     {
         $this->initConfig($domainName);
+
+        if (!$this->isDeployPathEmpty($deployPath, $domainName)) {
+            return [
+                'success' => false,
+                'output' => sprintf(
+                    'Deploy path "%s" already exists and is not empty. ' .
+                    'Choose an empty directory (or a new subdirectory) for the first clone, ' .
+                    'or manually initialize a git repository in the existing directory.',
+                    $deployPath
+                ),
+                'exit_code' => 1,
+                'blocked' => true,
+            ];
+        }
 
         // Ensure parent directory exists
         $parentDir = dirname($deployPath);
@@ -661,6 +693,7 @@ EOF\'',
             'success' => $exitCode === 0 && $this->hasGitRepo($deployPath, $domainName),
             'output' => $output,
             'exit_code' => $exitCode,
+            'blocked' => false,
         ];
     }
 
@@ -1031,11 +1064,13 @@ EOF\'',
         // First deploy: clone the repo if the deploy path does not contain a Git repository yet
         $cloned = false;
         $cloneResult = null;
+        $cloneBlocked = false;
         if (!empty($repoUrl) && !empty($deployPath) && !$this->hasGitRepo($deployPath, $domainName)) {
             $cloneResult = $this->cloneRepo($repoUrl, $deployPath, $domainName);
             $cloned = $cloneResult['success'];
+            $cloneBlocked = !empty($cloneResult['blocked']);
 
-            if (!$cloned) {
+            if (!$cloned && !$cloneBlocked) {
                 return $this->json([
                     'success' => false,
                     'message' => 'Configuration saved, but failed to clone repository: ' . ($cloneResult['output'] ?: 'unknown error'),
@@ -1046,14 +1081,16 @@ EOF\'',
             }
         }
 
-        // Run the deploy script immediately after save / clone
+        // Run the deploy script immediately after save / clone, unless clone was blocked
         $deployResult = null;
-        if (!empty($deployScriptPath)) {
+        if (!empty($deployScriptPath) && !$cloneBlocked) {
             $deployResult = $this->runDeployScript($deployScriptPath, $domainName);
         }
 
         $message = 'Git configuration saved successfully';
-        if ($cloned) {
+        if ($cloneBlocked) {
+            $message = 'Configuration saved. First clone skipped: ' . ($cloneResult['output'] ?? 'deploy path is not empty');
+        } elseif ($cloned) {
             $message = 'Repository cloned and deploy script executed';
         } elseif ($deployResult && $deployResult['success']) {
             $message = 'Git configuration saved and deploy script executed';
@@ -1063,6 +1100,7 @@ EOF\'',
             'success' => true,
             'message' => $message,
             'cloned' => $cloned,
+            'clone_blocked' => $cloneBlocked,
             'clone_output' => $cloneResult ? $cloneResult['output'] : null,
             'deploy_output' => $deployResult ? $deployResult['output'] : null,
             'deploy_exit_code' => $deployResult ? $deployResult['exit_code'] : null,

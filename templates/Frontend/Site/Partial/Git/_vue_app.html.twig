@@ -184,6 +184,8 @@
                     if (data.cloned) {
                         hasRepo.value = true
                         showNotification('success', 'Repository cloned and first deploy completed')
+                    } else if (data.clone_blocked) {
+                        showNotification('warning', data.message)
                     } else if (data.deploy_exit_code !== undefined && data.deploy_exit_code !== null) {
                         showNotification('success', 'Git configuration saved and deploy script executed')
                     } else {
