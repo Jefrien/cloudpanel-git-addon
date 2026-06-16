@@ -48,7 +48,7 @@ git clone https://github.com/Jefrien/cloudpanel-git-addon.git /opt/clp-git-addon
 Or install a specific release (recommended for production):
 
 ```bash
-wget -qO- https://github.com/Jefrien/cloudpanel-git-addon/archive/refs/tags/v1.0.13.tar.gz | tar xz -C /opt/ && mv /opt/cloudpanel-git-addon-1.0.13 /opt/clp-git-addon
+wget -qO- https://github.com/Jefrien/cloudpanel-git-addon/archive/refs/tags/v1.0.14.tar.gz | tar xz -C /opt/ && mv /opt/cloudpanel-git-addon-1.0.14 /opt/clp-git-addon
 ```
 
 ### 2. Run the installer

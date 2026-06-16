@@ -843,16 +843,14 @@ EOF\'',
         if (!$hooksResult['success']) {
             return $this->json([
                 'success' => false,
-                'message' => 'Configuration saved, but failed to update webhook hooks file. Run "clp-git-addon repair" to fix permissions.',
-                'debug' => $hooksResult['debug'] ?? null
+                'message' => 'Configuration saved, but failed to update webhook hooks file. Run "clp-git-addon repair" to fix permissions.'
             ], 500);
         }
 
         return $this->json([
             'success' => true,
             'message' => 'Git configuration saved successfully',
-            'config' => $config,
-            'debug' => $hooksResult['debug'] ?? null
+            'config' => $config
         ]);
     }
 
