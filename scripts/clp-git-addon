@@ -221,7 +221,7 @@ install_webhook_hooks() {
     mkdir -p "$WEBHOOK_CONFIG_DIR"
 
     # Ensure the clp user can read and write hooks configuration
-    chown clp:clp "$WEBHOOK_CONFIG_DIR"
+    chown -R clp:clp "$WEBHOOK_CONFIG_DIR"
     chmod 750 "$WEBHOOK_CONFIG_DIR"
 
     if [ ! -f "$WEBHOOK_HOOKS" ]; then

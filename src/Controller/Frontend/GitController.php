@@ -138,7 +138,7 @@ class GitController extends Controller
      * @param string|null $deployScriptPath Path to the deploy script, or null to remove
      * @return void
      */
-    private function updateWebhookHooks(string $domainName, ?string $deployScriptPath): void
+    private function updateWebhookHooks(string $domainName, ?string $deployScriptPath): bool
     {
         $hooksFile = $this->webhookHooksFile;
         $hooks = [];
@@ -175,7 +175,19 @@ class GitController extends Controller
             }));
         }
 
-        file_put_contents($hooksFile, json_encode($hooks, JSON_PRETTY_PRINT), LOCK_EX);
+        $jsonContent = json_encode($hooks, JSON_PRETTY_PRINT);
+        $written = file_put_contents($hooksFile, $jsonContent, LOCK_EX);
+
+        if ($written === false) {
+            $this->logger->error(sprintf(
+                'Failed to write webhook hooks file %s for domain %s',
+                $hooksFile,
+                $domainName
+            ));
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -782,7 +794,14 @@ EOF\'',
         $this->saveConfig($config, $domainName);
 
         // Update global webhook hooks file so the webhook server knows about this site
-        $this->updateWebhookHooks($domainName, $deployScriptPath);
+        $hooksUpdated = $this->updateWebhookHooks($domainName, $deployScriptPath);
+
+        if (!$hooksUpdated) {
+            return $this->json([
+                'success' => false,
+                'message' => 'Configuration saved, but failed to update webhook hooks file. Run "clp-git-addon repair" to fix permissions.'
+            ], 500);
+        }
 
         return $this->json([
             'success' => true,
@@ -833,9 +852,9 @@ EOF\'',
             return null;
         }
 
-        // Set executable permissions
+        // Set executable permissions (readable and executable by clp/webhook service)
         $chmodCmd = sprintf(
-            'sudo -u %s chmod +x %s',
+            'sudo -u %s chmod 755 %s',
             escapeshellarg($this->siteUser),
             escapeshellarg($scriptPath)
         );
