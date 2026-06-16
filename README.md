@@ -48,7 +48,7 @@ git clone https://github.com/Jefrien/cloudpanel-git-addon.git /opt/clp-git-addon
 Or install a specific release (recommended for production):
 
 ```bash
-wget -qO- https://github.com/Jefrien/cloudpanel-git-addon/archive/refs/tags/v1.0.7.tar.gz | tar xz -C /opt/ && mv /opt/cloudpanel-git-addon-1.0.7 /opt/clp-git-addon
+wget -qO- https://github.com/Jefrien/cloudpanel-git-addon/archive/refs/tags/v1.0.8.tar.gz | tar xz -C /opt/ && mv /opt/cloudpanel-git-addon-1.0.8 /opt/clp-git-addon
 ```
 
 ### 2. Run the installer
@@ -162,6 +162,7 @@ CloudPanel updates replace the entire `/home/clp/htdocs/app/` directory. The add
 
 ```
 clp-git-addon install     # Full installation
+clp-git-addon update      # Download and install the latest release from GitHub
 clp-git-addon check       # Verify all components are in place
 clp-git-addon repair      # Re-apply patches (runs automatically after updates)
 clp-git-addon uninstall   # Remove addon from CloudPanel (keeps site SSH keys/config)

@@ -327,6 +327,85 @@ cmd_install() {
     echo ""
 }
 
+cmd_update() {
+    check_root
+    echo "Checking for latest CloudPanel Git Addon release..."
+    echo ""
+
+    local latest_tag
+    latest_tag=$(curl -sL -A 'clp-git-addon' https://api.github.com/repos/Jefrien/cloudpanel-git-addon/releases/latest | \
+        grep -oP '"tag_name":\s*"\K[^"]+')
+
+    if [ -z "$latest_tag" ]; then
+        log_err "Could not determine latest release from GitHub"
+        exit 1
+    fi
+
+    log_ok "Latest release: $latest_tag"
+
+    local current_version
+    current_version=$(cat "$ADDON_DIR/VERSION" 2>/dev/null || echo "unknown")
+
+    if [ "$current_version" = "${latest_tag#v}" ]; then
+        log_ok "Already running the latest version ($latest_tag)"
+        return 0
+    fi
+
+    echo "Current version: v$current_version"
+    echo "Updating to $latest_tag..."
+    echo ""
+
+    local download_url="https://github.com/Jefrien/cloudpanel-git-addon/archive/refs/tags/${latest_tag}.tar.gz"
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    local tarball="$tmp_dir/cloudpanel-git-addon.tar.gz"
+
+    if ! curl -sL -A 'clp-git-addon' "$download_url" -o "$tarball"; then
+        log_err "Failed to download release tarball"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    if [ ! -s "$tarball" ]; then
+        log_err "Downloaded tarball is empty"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    # Backup current installation
+    local backup_dir="$ADDON_DIR.backup.$(date +%Y%m%d%H%M%S)"
+    echo "Creating backup at $backup_dir..."
+    cp -a "$ADDON_DIR" "$backup_dir"
+
+    # Extract new release
+    tar xzf "$tarball" -C "$tmp_dir"
+
+    local extracted_dir
+    extracted_dir=$(find "$tmp_dir" -maxdepth 1 -type d -name 'cloudpanel-git-addon-*' | head -n 1)
+
+    if [ -z "$extracted_dir" ]; then
+        log_err "Could not find extracted addon directory"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    # Replace addon files
+    echo "Replacing addon files..."
+    cp -a "${extracted_dir}"/* "$ADDON_DIR/"
+
+    # Cleanup
+    rm -rf "$tmp_dir"
+
+    log_ok "Addon source updated to $latest_tag"
+    echo ""
+
+    # Re-run install to apply changes
+    cmd_install
+
+    echo ""
+    log_ok "Update complete! Backup kept at $backup_dir"
+}
+
 cmd_repair() {
     local quiet=false
     [ "$1" = "--quiet" ] && quiet=true
@@ -464,6 +543,9 @@ case "${1:-}" in
     install)
         cmd_install
         ;;
+    update)
+        cmd_update
+        ;;
     repair)
         cmd_repair "${2:-}"
         ;;
@@ -480,6 +562,7 @@ case "${1:-}" in
         echo ""
         echo "Commands:"
         echo "  install     Install the addon into CloudPanel"
+        echo "  update      Download and install the latest release from GitHub"
         echo "  repair      Re-apply patches (e.g., after CloudPanel update)"
         echo "  check       Verify addon status"
         echo "  uninstall   Remove addon from CloudPanel"
