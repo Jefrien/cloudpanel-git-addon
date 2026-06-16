@@ -163,15 +163,17 @@ install_webhook_binary() {
     mkdir -p "$WEBHOOK_DIR"
     tar xzf "$tarball" -C "$tmp_dir"
 
-    # The tarball contains a single binary named 'webhook'
-    if [ -f "$tmp_dir/webhook" ]; then
-        cp "$tmp_dir/webhook" "$WEBHOOK_BIN"
-    else
+    # The tarball may contain the binary at the root or inside a subdirectory
+    local extracted_bin
+    extracted_bin=$(find "$tmp_dir" -type f -name 'webhook' | head -n 1)
+
+    if [ -z "$extracted_bin" ]; then
         log_err "Could not find webhook binary in downloaded archive"
         rm -rf "$tmp_dir"
         return 1
     fi
 
+    cp "$extracted_bin" "$WEBHOOK_BIN"
     chmod +x "$WEBHOOK_BIN"
     rm -rf "$tmp_dir"
 
