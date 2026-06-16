@@ -138,28 +138,27 @@ class GitController extends Controller
      * @param string|null $deployScriptPath Path to the deploy script, or null to remove
      * @return void
      */
-    private function updateWebhookHooks(string $domainName, ?string $deployScriptPath): bool
+    private function updateWebhookHooks(string $domainName, ?string $deployScriptPath): array
     {
         $hooksFile = $this->webhookHooksFile;
         $hooks = [];
-
-        $this->logger->info(sprintf(
-            '[updateWebhookHooks] domain=%s deployScriptPath=%s file=%s exists=%s readable=%s',
-            $domainName,
-            $deployScriptPath ?? 'NULL',
-            $hooksFile,
-            file_exists($hooksFile) ? 'yes' : 'no',
-            is_readable($hooksFile) ? 'yes' : 'no'
-        ));
+        $debug = [
+            'domain' => $domainName,
+            'deploy_script_path' => $deployScriptPath,
+            'hooks_file' => $hooksFile,
+            'hooks_file_exists' => file_exists($hooksFile),
+            'hooks_file_readable' => is_readable($hooksFile),
+            'php_user' => function_exists('posix_getpwuid') ? (posix_getpwuid(posix_geteuid())['name'] ?? 'unknown') : 'unknown',
+        ];
 
         if (file_exists($hooksFile) && is_readable($hooksFile)) {
             $content = file_get_contents($hooksFile);
             $hooks = json_decode($content, true) ?: [];
         }
 
-        $this->logger->info(sprintf('[updateWebhookHooks] loaded %d existing hook(s)', count($hooks)));
+        $debug['existing_hooks_count'] = count($hooks);
 
-        if ($deployScriptPath && file_exists($deployScriptPath)) {
+        if ($deployScriptPath !== null) {
             $existingIndex = null;
             foreach ($hooks as $index => $hook) {
                 if (($hook['id'] ?? '') === $domainName) {
@@ -187,21 +186,45 @@ class GitController extends Controller
         }
 
         $jsonContent = json_encode($hooks, JSON_PRETTY_PRINT);
-        $this->logger->info(sprintf('[updateWebhookHooks] writing %d hook(s) to %s', count($hooks), $hooksFile));
+        $debug['new_hooks_count'] = count($hooks);
+        $debug['json_content'] = $jsonContent;
 
-        $written = file_put_contents($hooksFile, $jsonContent, LOCK_EX);
+        // Try direct write first
+        $written = @file_put_contents($hooksFile, $jsonContent, LOCK_EX);
+        $debug['file_put_contents_result'] = $written;
 
-        if ($written === false) {
-            $this->logger->error(sprintf(
-                'Failed to write webhook hooks file %s for domain %s',
-                $hooksFile,
-                $domainName
-            ));
-            return false;
+        // Fallback: write via shell as clp if direct write failed or wrote 0 bytes
+        if ($written === false || $written === 0) {
+            $shellCmd = sprintf(
+                'echo %s | sudo -u clp tee %s > /dev/null',
+                escapeshellarg($jsonContent),
+                escapeshellarg($hooksFile)
+            );
+            $shellOutput = shell_exec($shellCmd . ' 2>&1');
+            $debug['shell_fallback_used'] = true;
+            $debug['shell_output'] = trim($shellOutput ?? '');
+
+            // Verify by reading back
+            $verify = file_get_contents($hooksFile);
+            $debug['verify_after_shell'] = $verify;
+            $written = ($verify === $jsonContent) ? strlen($jsonContent) : false;
+        } else {
+            $debug['shell_fallback_used'] = false;
         }
 
-        $this->logger->info(sprintf('[updateWebhookHooks] wrote %d bytes', $written));
-        return true;
+        $debug['final_written'] = $written;
+
+        if ($written === false || $written === 0) {
+            return [
+                'success' => false,
+                'debug' => $debug,
+            ];
+        }
+
+        return [
+            'success' => true,
+            'debug' => $debug,
+        ];
     }
 
     /**
@@ -815,19 +838,21 @@ EOF\'',
         $this->saveConfig($config, $domainName);
 
         // Update global webhook hooks file so the webhook server knows about this site
-        $hooksUpdated = $this->updateWebhookHooks($domainName, $deployScriptPath);
+        $hooksResult = $this->updateWebhookHooks($domainName, $deployScriptPath);
 
-        if (!$hooksUpdated) {
+        if (!$hooksResult['success']) {
             return $this->json([
                 'success' => false,
-                'message' => 'Configuration saved, but failed to update webhook hooks file. Run "clp-git-addon repair" to fix permissions.'
+                'message' => 'Configuration saved, but failed to update webhook hooks file. Run "clp-git-addon repair" to fix permissions.',
+                'debug' => $hooksResult['debug'] ?? null
             ], 500);
         }
 
         return $this->json([
             'success' => true,
             'message' => 'Git configuration saved successfully',
-            'config' => $config
+            'config' => $config,
+            'debug' => $hooksResult['debug'] ?? null
         ]);
     }
 
