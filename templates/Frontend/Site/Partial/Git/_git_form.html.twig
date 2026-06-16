@@ -1,0 +1,56 @@
+                        <div class="row">
+                            <div class="col-12">
+                                <label class="col-form-label" for="git-url">Git URL</label>
+                                <input type="text" class="form-control" id="git-url" v-model="gitUrl">
+                                <div class="form-text">
+                                    Enter the URL of your Git repository (e.g., git@github.com:username/repository.git).
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col">
+                                <button class="btn btn-outline-dark" @click.prevent="handleTestConnection" :disabled="loadingTestConnection">
+                                    <span v-if="loadingTestConnection" class="spinner-border spinner-border-sm me-2"
+                                        role="status" aria-hidden="true"></span>
+                                    <span v-if="loadingTestConnection">Testing...</span>
+                                    <span v-else>Test Connection</span>
+                                </button>
+                            </div>
+                            <div class="col text-end">
+                                <div v-if="testConnectionResult"
+                                    :class="testConnectionResult.ok ? 'text-success' : 'text-danger'"
+                                    v-text="testConnectionResult.message">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row" v-if="branches.length > 0">
+                            <div class="col-12">
+                                <label class="col-form-label" for="git-branch">Git Branch</label>
+                                <select class="form-select" aria-label="Select branch" v-model="gitBranch">
+                                    <option selected>Select branch</option>
+                                    <option v-for="branch in branches" :value="branch" :key="branch"
+                                        :selected="branch === gitBranch" v-text="branch"></option>
+                                </select>
+                                <div class="form-text">
+                                    Select the branch to deploy.
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row" v-if="branches.length > 0 || deployPath">
+                            <div class="col-12">
+                                <label class="col-form-label" for="git-branch">Deploy Path</label>
+                                <input type="text" class="form-control" v-model="deployPath">
+                                <div class="form-text">
+                                    Enter the deploy path.
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row" v-show="branches.length > 0 || deployScript">
+                            <div class="col-12">
+                                <label class="col-form-label" for="git-branch">Deploy Script</label>
+                                <textarea class="form-control" id="editor" rows="3"></textarea>
+                                <div class="form-text">
+                                    Enter the deploy script in bash format.
+                                </div>
+                            </div>
+                        </div>

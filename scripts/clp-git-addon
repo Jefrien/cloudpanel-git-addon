@@ -114,13 +114,19 @@ copy_files() {
     cp "$ADDON_DIR/src/Controller/Frontend/GitController.php" "$CLP_CONTROLLERS/GitController.php"
     cp "$ADDON_DIR/templates/Frontend/Site/git.html.twig" "$CLP_TEMPLATES/git.html.twig"
 
+    # Copy Git partial templates
+    mkdir -p "$CLP_TEMPLATES/Partial/Git"
+    cp "$ADDON_DIR/templates/Frontend/Site/Partial/Git/"*.twig "$CLP_TEMPLATES/Partial/Git/"
+
     # Ensure correct ownership (CloudPanel files are owned by clp:clp)
     chown clp:clp "$CLP_CONTROLLERS/GitController.php"
     chown clp:clp "$CLP_TEMPLATES/git.html.twig"
+    chown -R clp:clp "$CLP_TEMPLATES/Partial/Git"
 
     # Match CloudPanel file permissions (750)
     chmod 770 "$CLP_CONTROLLERS/GitController.php"
     chmod 770 "$CLP_TEMPLATES/git.html.twig"
+    chmod -R 770 "$CLP_TEMPLATES/Partial/Git"
 
     log_ok "Addon files copied"
 }
@@ -416,6 +422,7 @@ cmd_repair() {
     if is_patched && \
        [ -f "$CLP_CONTROLLERS/GitController.php" ] && \
        [ -f "$CLP_TEMPLATES/git.html.twig" ] && \
+       [ -d "$CLP_TEMPLATES/Partial/Git" ] && \
        is_webhook_installed; then
         $quiet || log_ok "All patches intact, nothing to repair."
         return 0
@@ -456,6 +463,13 @@ cmd_check() {
         log_ok "git.html.twig present"
     else
         log_err "git.html.twig MISSING"
+        all_ok=false
+    fi
+
+    if [ -d "$CLP_TEMPLATES/Partial/Git" ]; then
+        log_ok "Git partial templates present"
+    else
+        log_err "Git partial templates MISSING"
         all_ok=false
     fi
 
@@ -520,6 +534,7 @@ cmd_uninstall() {
     # Remove addon files from CloudPanel
     rm -f "$CLP_CONTROLLERS/GitController.php"
     rm -f "$CLP_TEMPLATES/git.html.twig"
+    rm -rf "$CLP_TEMPLATES/Partial/Git"
 
     # Remove routes
     unpatch_routes

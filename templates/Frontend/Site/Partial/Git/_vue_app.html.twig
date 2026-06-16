@@ -1,0 +1,254 @@
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script>
+    const { createApp, ref, onMounted } = Vue
+
+    createApp({
+        setup() {
+            // ============================================
+            // UI State References
+            // ============================================
+            const myModal = ref(null)
+            const editor = ref(null)
+            const notification = ref({ type: '', message: '' })
+
+            // ============================================
+            // Configuration State References
+            // ============================================
+            const defaultKey = ref('{{ defaultKey.public_key }}')
+            const gitUrl = ref('{{ config.repo_url|default(gitUrl) }}')
+            const gitBranch = ref('{{ config.branch|default("main") }}')
+            const errors = ref({})
+            const branches = ref(['{{ config.branch|default("main") }}'])
+            const deployPath = ref('{{ config.deploy_path|default(rootDirectory) }}')
+            const deployScript = ref('{{ config.deploy_script|default("#!/bin/bash\n\n# Your deployment script here")|escape("js") }}')
+            const webhookUrl = ref('{{ webhookUrl }}')
+            const copiedWebhook = ref(false)
+
+            // ============================================
+            // SSH Key Generation State References
+            // ============================================
+            const ssh_email = ref('')
+            const ssh_name = ref('id_ed25519_{{ site.domainName }}')
+
+            // ============================================
+            // Loading and Test State
+            // ============================================
+            const loadingGenerateKey = ref(false)
+            const loadingTestConnection = ref(false)
+            const loadingSave = ref(false)
+            const testConnectionResult = ref(null)
+
+            // ============================================
+            // Helper Functions
+            // ============================================
+
+            /**
+             * Display a notification message to the user
+             * Automatically clears after 5 seconds
+             * @param {string} type - Notification type (success, danger, etc.)
+             * @param {string} message - The notification message
+             */
+            function showNotification(type, message) {
+                notification.value = { type, message }
+                setTimeout(() => {
+                    notification.value = { type: '', message: '' }
+                }, 5000)
+            }
+
+            /**
+             * Copy the webhook URL to the clipboard
+             * Shows a temporary success indicator on the copy button.
+             */
+            const copyWebhookUrl = async () => {
+                try {
+                    await navigator.clipboard.writeText(webhookUrl.value)
+                    copiedWebhook.value = true
+                    setTimeout(() => {
+                        copiedWebhook.value = false
+                    }, 2000)
+                } catch (err) {
+                    showNotification('danger', 'Could not copy webhook URL')
+                }
+            }
+
+            /**
+             * Initialize the Ace editor with bash mode and proper settings
+             * Configures the editor for script editing with auto-scroll and line limits
+             * Syncs editor content with deployScript ref
+             */
+            function loadVhostEditor() {
+                editor.value.session.setMode('ace/mode/sh');
+                editor.value.setValue(deployScript.value, -1);
+                editor.value.clearSelection();
+                editor.value.setAutoScrollEditorIntoView(true);
+                editor.value.setOptions({ minLines: 30, maxLines: Infinity });
+                editor.value.on('change', () => {
+                    deployScript.value = editor.value.getValue();
+                });
+            }
+
+            // ============================================
+            // Event Handlers
+            // ============================================
+
+            /**
+             * Save Git configuration to the server
+             * Sends repo URL, branch, deploy path, and deploy script
+             */
+            const handleSave = async () => {
+                loadingSave.value = true
+
+                const response = await fetch("{{ path('clp_site_git_save_config', {'domainName': site.domainName}) }}", {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        repo_url: gitUrl.value,
+                        branch: gitBranch.value,
+                        deploy_path: deployPath.value,
+                        deploy_script: deployScript.value
+                    })
+                })
+
+                const data = await response.json()
+                console.log(data)
+                if (data.success) {
+                    showNotification('success', 'Git configuration saved successfully')
+                } else {
+                    showNotification('danger', 'Failed to save git configuration: ' + data.message)
+                }
+                loadingSave.value = false
+            }
+
+            /**
+             * Generate a new SSH key pair
+             * Validates form, sends request to backend, and updates UI with new key
+             */
+            const handleGenerateSshKey = async () => {
+                loadingGenerateKey.value = true
+
+                errors.value = {}
+                // validate email
+                if (!ssh_email.value) {
+                    errors.value.email = 'Email is required'
+                }
+
+                // validate name
+                if (!ssh_name.value) {
+                    errors.value.name = 'Name is required'
+                }
+
+                if (Object.keys(errors.value).length > 0) {
+                    loadingGenerateKey.value = false
+                    return
+                }
+
+                myModal.value.hide()
+
+                const response = await fetch("{{ path('clp_site_git_generate_key', {'domainName': site.domainName}) }}", {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        domainName: '{{ site.domainName }}',
+                        email: ssh_email.value,
+                        filename: ssh_name.value
+                    })
+                })
+
+                const data = await response.json()
+                console.log(data)
+                if (!data.success) {
+                    showNotification('danger', data.message)
+                    loadingGenerateKey.value = false
+                    return
+                }
+                showNotification('success', 'SSH key generated successfully')
+                defaultKey.value = data.public_key
+                loadingGenerateKey.value = false
+            }
+
+            /**
+             * Test SSH connection to Git repository
+             * Validates connection and fetches available branches if successful
+             */
+            const handleTestConnection = async () => {
+                loadingTestConnection.value = true
+
+                const response = await fetch("{{ path('clp_site_git_test_connection', {'domainName': site.domainName}) }}", {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        domainName: '{{ site.domainName }}',
+                        key: defaultKey.value,
+                        repo_url: gitUrl.value
+                    })
+                })
+
+                const data = await response.json()
+                console.log(data)
+                testConnectionResult.value = data
+                if (data.ok) {
+                    branches.value = data.branches.branches.map(branch => branch.name)
+                    gitBranch.value = data.branches.default_branch
+                }
+                loadingTestConnection.value = false
+            }
+
+            // ============================================
+            // Lifecycle Hook
+            // ============================================
+
+            /**
+             * Initialize component on mount
+             * Sets up Bootstrap modal and Ace editor
+             */
+            onMounted(() => {
+                myModal.value = new bootstrap.Modal(document.getElementById('new-ssh-key-modal'), {})
+
+                editor.value = ace.edit('editor');
+                loadVhostEditor();
+            })
+
+            // ============================================
+            // Return reactive references and methods
+            // ============================================
+            return {
+                // UI State
+                myModal,
+                notification,
+
+                // Configuration
+                defaultKey,
+                gitUrl,
+                gitBranch,
+                deployPath,
+                deployScript,
+                testConnectionResult,
+                branches,
+                webhookUrl,
+                copiedWebhook,
+
+                // SSH Key Generation
+                ssh_email,
+                ssh_name,
+                errors,
+
+                // Loading States
+                loadingGenerateKey,
+                loadingTestConnection,
+                loadingSave,
+
+                // Methods
+                handleSave,
+                handleGenerateSshKey,
+                handleTestConnection,
+                copyWebhookUrl,
+            }
+        }
+    }).mount('#app-git')
+</script>

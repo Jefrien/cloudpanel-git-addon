@@ -1,0 +1,35 @@
+    <div class="modal fade" id="new-ssh-key-modal" tabindex="-1" aria-labelledby="newSshKeyModalLabel"
+        aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h1 class="modal-title fs-5" id="newSshKeyModalLabel">Generate SSH Key</h1>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Fill in the form to generate a new SSH key.</p>
+                    <form @submit.prevent="handleGenerateSshKey">
+                        <div class="mb-3">
+                            <label for="email" class="form-label">Email address</label>
+                            <input type="email" class="form-control" id="email" v-model="ssh_email">
+                            <span class="badge bg-danger" v-if="errors.email" v-text="errors.email"></span>
+                        </div>
+                        <div class="mb-3">
+                            <label for="name" class="form-label">Key name</label>
+                            <input type="text" class="form-control" id="name" value="id_ed25519" v-model="ssh_name">
+                            <span class="badge bg-danger" v-if="errors.name" v-text="errors.name"></span>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" @click="handleGenerateSshKey" :disabled="loadingGenerateKey">
+                        <span v-if="loadingGenerateKey" class="spinner-border spinner-border-sm me-2"
+                            role="status" aria-hidden="true"></span>
+                        <span v-if="loadingGenerateKey">Generating...</span>
+                        <span v-else>Generate</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>

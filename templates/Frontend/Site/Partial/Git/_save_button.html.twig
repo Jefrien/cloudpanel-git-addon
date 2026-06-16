@@ -1,0 +1,16 @@
+                        <div class="row" v-if="notification.message">
+                            <div class="col-12">
+                                <div :class="'alert alert-' + notification.type" role="alert"
+                                    v-text="notification.message"></div>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-12 text-end">
+                                <button class="btn btn-blue btn-lg" id="btn-save-git" @click="handleSave" :disabled="loadingSave">
+                                    <span v-if="loadingSave" class="spinner-border spinner-border-sm me-2"
+                                        role="status" aria-hidden="true"></span>
+                                    <span v-if="loadingSave">Saving...</span>
+                                    <span v-else>{% trans %}Save{% endtrans %}</span>
+                                </button>
+                            </div>
+                        </div>

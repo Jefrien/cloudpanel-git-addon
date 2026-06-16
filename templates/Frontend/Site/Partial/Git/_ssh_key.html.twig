@@ -1,0 +1,23 @@
+                        <div class="row">
+                            <div class="col-12">
+                                <div class="row mb-1">
+                                    <div class="col">
+                                        <label class="col-form-label" for="public-key">SSH Key</label>
+                                    </div>
+                                    <div class="col text-end">
+                                        <button class="btn btn-sm btn-outline-dark" id="btn-generate-key"
+                                            @click="myModal.show()" :disabled="loadingGenerateKey">
+                                            <span v-if="loadingGenerateKey" class="spinner-border spinner-border-sm me-2"
+                                                role="status" aria-hidden="true"></span>
+                                            <span v-if="loadingGenerateKey">Loading...</span>
+                                            <span v-else>Generate a new key</span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <textarea class="form-control form-control-lg mb-2" id="public-key" rows="2"
+                                    v-text="defaultKey"></textarea>
+                                <div class="form-text">
+                                    Copy this public key to your Git repository's deploy keys.
+                                </div>
+                            </div>
+                        </div>
