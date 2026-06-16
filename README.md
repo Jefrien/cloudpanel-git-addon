@@ -1,8 +1,8 @@
-# CloudPanel Mail Addon
+# CloudPanel Git Addon
 
-**DKIM, SPF & DMARC management for CloudPanel v2** -- directly in the CloudPanel UI.
+**Git deployment management for CloudPanel v2** -- directly in the CloudPanel UI.
 
-CloudPanel is a lightweight server control panel that intentionally does not include email features. This addon fills the gap for outbound email authentication: it adds a **"Mail" tab** to every site in CloudPanel, where you can generate DKIM keys and see the exact DNS records needed for SPF, DKIM, and DMARC -- with copy-to-clipboard and live DNS verification.
+CloudPanel is a lightweight server control panel without built-in Git deployment features. This addon fills the gap: it adds a **"Git" tab** to every site in CloudPanel, where you can generate SSH keys, register the public key as a deploy key in your repository, and configure repository URL, branch, deploy path, and a custom bash deploy script.
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 ![CloudPanel: v2.5+](https://img.shields.io/badge/CloudPanel-v2.5%2B-orange)
@@ -12,26 +12,28 @@ CloudPanel is a lightweight server control panel that intentionally does not inc
 
 ## What This Addon Does
 
-When you host websites on CloudPanel, those sites often need to send transactional emails -- password resets, contact form submissions, order confirmations. Without proper email authentication (DKIM, SPF, DMARC), these emails end up in spam folders or get rejected entirely.
+When you host websites on CloudPanel, you often need a reliable way to deploy code from a private Git repository. Manually managing SSH keys, repository access, and deploy scripts on the server can be tedious and error-prone.
 
 This addon:
 
-- Adds a **"Mail" tab** to every site in CloudPanel's web interface
-- **Generates 2048-bit DKIM keys** per domain with one click
-- Displays **copy-ready DNS records** (DKIM TXT, SPF TXT, DMARC TXT) that you paste into your domain's DNS settings
-- **Verifies DNS propagation** with a live check button -- green badge when records are active, red when missing
-- Configures **OpenDKIM** to sign all outbound mail with DKIM
+- Adds a **"Git" tab** to every site in CloudPanel's web interface
+- **Generates ED25519 SSH key pairs** per domain with one click
+- Displays the **public key** so you can copy it as a deploy key in your Git provider
+- Lets you configure the **repository URL**, **branch**, **deploy path**, and a **custom deploy script**
+- **Tests the SSH connection** to the repository and lists remote branches
+- **Persists configuration per site** in a JSON file owned by the site user
 - **Survives CloudPanel updates** via an APT hook that re-applies patches automatically
 
-> **Note:** This addon does not install a mail server. CloudPanel already ships with Postfix (via its `bsd-mailx` dependency). This addon builds on top of that existing Postfix installation by adding OpenDKIM for email authentication. If your server uses a different MTA (sendmail, exim, etc.), the OpenDKIM integration may need manual adjustment.
+> **Note:** This addon does not install Git for you. CloudPanel servers usually ship with `git` and `ssh-keygen`; the addon uses these existing tools to manage SSH authentication and repository access. If your server uses HTTPS-only repositories, the SSH-based workflow will need manual adjustment.
 
 ---
 
 ## Requirements
 
-- **CloudPanel v2.5+** on Ubuntu 24.04 or 22.04 (Postfix is included by default)
+- **CloudPanel v2.5+** on Ubuntu 24.04 or 22.04
 - **Root access** to the server
-- A domain with DNS access (to add the generated TXT records)
+- `git` and `ssh-keygen` available on the server
+- A Git repository you can register the deploy key with
 
 ---
 
@@ -40,26 +42,24 @@ This addon:
 ### 1. Clone to your server
 
 ```bash
-git clone https://github.com/s-a-s-k-i-a/cloudpanel-mail-addon.git /opt/clp-mail-addon
+git clone https://github.com/Jefrien/cloudpanel-git-addon.git /opt/clp-git-addon
 ```
 
 Or install a specific release (recommended for production):
 
 ```bash
-wget -qO- https://github.com/s-a-s-k-i-a/cloudpanel-mail-addon/archive/refs/tags/v1.0.0.tar.gz | tar xz -C /opt/ && mv /opt/cloudpanel-mail-addon-1.0.0 /opt/clp-mail-addon
+wget -qO- https://github.com/Jefrien/cloudpanel-git-addon/archive/refs/tags/v1.0.0.tar.gz | tar xz -C /opt/ && mv /opt/cloudpanel-git-addon-1.0.0 /opt/clp-git-addon
 ```
 
 ### 2. Run the installer
 
 ```bash
-/opt/clp-mail-addon/scripts/clp-mail-addon install
+/opt/clp-git-addon/scripts/clp-git-addon install
 ```
 
 This will:
-- Install **OpenDKIM** and configure it to work with the existing Postfix installation (no new mail server is installed)
-- Connect OpenDKIM to Postfix via milter socket
 - Copy the addon files into CloudPanel
-- Add the "Mail" tab to the site navigation
+- Add the "Git" tab to the site navigation
 - Register the necessary routes
 - Install an APT hook for automatic repair after CloudPanel updates
 - Clear the Symfony cache
@@ -67,7 +67,7 @@ This will:
 ### 3. Verify
 
 ```bash
-clp-mail-addon check
+clp-git-addon check
 ```
 
 All items should show `[OK]`.
@@ -77,13 +77,13 @@ All items should show `[OK]`.
 ## Usage
 
 1. Open CloudPanel and navigate to any site
-2. Click the **"Mail"** tab
-3. Click **"Generate DKIM Key"** if no key exists yet
-4. Copy the displayed DNS records into your domain's DNS settings:
-   - **DKIM**: TXT record at `mail._domainkey.yourdomain.com`
-   - **SPF**: TXT record at `yourdomain.com`
-   - **DMARC**: TXT record at `_dmarc.yourdomain.com`
-5. Click **"Verify DNS"** to check if the records have propagated
+2. Click the **"Git"** tab
+3. Click **"Generate SSH Key"** if no key exists yet
+4. Copy the displayed public key and add it as a **deploy key** in your Git repository settings
+5. Enter the **repository URL** (SSH format, e.g. `git@github.com:username/repo.git`)
+6. Click **"Test Connection"** to verify SSH access and list remote branches
+7. Select the **branch**, enter the **deploy path**, and optionally provide a **deploy script**
+8. Click **"Save Configuration"**
 
 ---
 
@@ -95,126 +95,134 @@ The addon integrates into CloudPanel's Symfony application without modifying any
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| `MailController.php` | `src/Controller/Frontend/` | Handles key generation, DNS display, verification |
-| `mail.html.twig` | `templates/Frontend/Site/` | The "Mail" tab UI |
-| `mail.css` | `public/assets/css/frontend/` | Styling for DNS record boxes |
+| `GitController.php` | `src/Controller/Frontend/` | Handles key generation, config I/O, SSH tests, branch listing |
+| `git.html.twig` | `templates/Frontend/Site/` | The "Git" tab UI |
 | Route entries | `config/routes.yaml` | URL routing for the new tab |
-| Tab entry | `tab-container.html.twig` | Adds "Mail" to the navigation |
+| Tab entry | `tab-container.html.twig` | Adds "Git" to the navigation |
 
 ### Permissions
 
-CloudPanel runs its PHP-FPM process as the `clp` user. The `clp` user has passwordless sudo access (configured by CloudPanel itself in `/etc/sudoers.d/cloudpanel`). The addon uses `sudo` for operations that require root privileges:
+CloudPanel runs its PHP-FPM process as the `clp` user. The `clp` user has passwordless sudo access (configured by CloudPanel itself in `/etc/sudoers.d/cloudpanel`). The addon uses `sudo -u <siteUser>` for operations that must run as the site user:
 
-- Reading DKIM keys (owned by `opendkim:opendkim`)
-- Generating new DKIM key pairs via `opendkim-genkey`
-- Updating OpenDKIM configuration files
-- Restarting the OpenDKIM service
+- Generating and reading SSH key pairs
+- Reading and writing per-site configuration
+- Executing `git` commands with the site's SSH identity
+- Saving and executing deploy scripts
 
-**No credentials, private keys, or sensitive data are stored in or exposed by the addon.** DKIM private keys remain on the server under `/etc/opendkim/keys/`, owned by the `opendkim` user with restricted permissions (640).
+**SSH private keys remain in `/home/<siteUser>/.ssh/`** with `600` permissions and are never exposed in the UI. Configuration files are stored as `/home/<siteUser>/git-config.json` with `600` permissions.
 
 ### Update Safety
 
 CloudPanel updates replace the entire `/home/clp/htdocs/app/` directory. The addon handles this with:
 
-1. **Source files** stored separately at `/opt/clp-mail-addon/` (untouched by updates)
-2. **APT hook** at `/etc/apt/apt.conf.d/99-clp-mail-addon` that runs after every `dpkg` operation
-3. **Idempotent repair**: The hook checks if patches are intact (a single `grep`, <1ms). If CloudPanel was updated and patches are gone, it re-applies them and clears the Symfony cache
+1. **Source files** stored separately at `/opt/clp-git-addon/` (untouched by updates)
+2. **APT hook** at `/etc/apt/apt.conf.d/99-clp-git-addon` that runs after every `dpkg` operation
+3. **Idempotent repair**: The hook checks if patches are intact. If CloudPanel was updated and patches are gone, it re-applies them and clears the Symfony cache
 
 ---
 
 ## CLI Reference
 
 ```
-clp-mail-addon install     # Full installation
-clp-mail-addon check       # Verify all components are in place
-clp-mail-addon repair      # Re-apply patches (runs automatically after updates)
-clp-mail-addon uninstall   # Remove addon from CloudPanel (keeps DKIM keys)
+clp-git-addon install     # Full installation
+clp-git-addon check       # Verify all components are in place
+clp-git-addon repair      # Re-apply patches (runs automatically after updates)
+clp-git-addon uninstall   # Remove addon from CloudPanel (keeps site SSH keys/config)
 ```
 
 ---
 
-## DNS Records Explained
+## Configuration Files
 
-### SPF (Sender Policy Framework)
+### Per-site configuration
 
-Tells receiving mail servers which IPs are authorized to send email for your domain.
-
-```
-v=spf1 ip4:YOUR_SERVER_IP ip6:YOUR_SERVER_IPV6 -all
-```
-
-### DKIM (DomainKeys Identified Mail)
-
-Adds a cryptographic signature to every outgoing email, proving it was sent from your server and was not tampered with in transit.
+Each site stores its configuration in:
 
 ```
-mail._domainkey.yourdomain.com  TXT  "v=DKIM1; h=sha256; k=rsa; p=YOUR_PUBLIC_KEY"
+/home/<siteUser>/git-config.json
 ```
 
-### DMARC (Domain-based Message Authentication, Reporting & Conformance)
+Example content:
 
-Tells receiving mail servers what to do when SPF or DKIM checks fail.
+```json
+{
+    "filename": "id_ed25519_examplecom",
+    "repo_url": "git@github.com:username/example.com.git",
+    "branch": "main",
+    "deploy_path": "/home/site-www-example/htdocs/example.com",
+    "deploy_script_path": "/home/site-www-example/deploy-example.com.sh"
+}
+```
+
+### SSH keys
+
+Generated keys are stored in:
 
 ```
-_dmarc.yourdomain.com  TXT  "v=DMARC1; p=quarantine; rua=mailto:postmaster@yourhostname"
+/home/<siteUser>/.ssh/
 ```
+
+- Private key: `600` permissions
+- Public key: `644` permissions
+
+### Deploy scripts
+
+Custom deploy scripts are saved as:
+
+```
+/home/<siteUser>/deploy-<domain>.sh
+```
+
+The script is made executable and can contain any bash commands needed for your deployment workflow.
 
 ---
 
 ## Troubleshooting
 
-### Mail tab does not appear
+### Git tab does not appear
 
 ```bash
-clp-mail-addon check    # Identify what is missing
-clp-mail-addon repair   # Re-apply patches
+clp-git-addon check    # Identify what is missing
+clp-git-addon repair   # Re-apply patches
 ```
 
-### DKIM key generation fails
+### SSH test fails
 
-Check that OpenDKIM tools are installed:
+1. Verify the public key is registered as a deploy key in your Git repository
+2. Ensure the repository URL uses the SSH format: `git@github.com:username/repo.git`
+3. Check that the site user can read the private key:
+   ```bash
+   sudo -u site-www-example cat /home/site-www-example/.ssh/id_ed25519_examplecom.pub
+   ```
+4. Test manually as the site user:
+   ```bash
+   sudo -u site-www-example bash -c 'GIT_SSH_COMMAND="ssh -i /home/site-www-example/.ssh/id_ed25519_examplecom" git ls-remote git@github.com:username/repo.git HEAD'
+   ```
 
-```bash
-which opendkim-genkey    # Should return /usr/bin/opendkim-genkey
-```
+### Branches are not listed
 
-If missing: `apt install opendkim opendkim-tools`
-
-### Emails still going to spam
-
-1. Verify all three DNS records are set (use the "Verify DNS" button in the Mail tab)
-2. Check that PTR (reverse DNS) is configured for your server IP
-3. Test with [mail-tester.com](https://www.mail-tester.com/) for a detailed report
-4. Ensure your server IP is not on any blacklists
+- Confirm the SSH test succeeds first
+- Make sure the repository has at least one branch pushed
+- Check the CloudPanel logs for any `git ls-remote` errors
 
 ---
 
 ## Security
 
-- **No credentials stored**: The addon does not store, transmit, or expose any passwords, API keys, or private keys
-- **DKIM private keys**: Generated and stored under `/etc/opendkim/keys/` with `opendkim:opendkim` ownership and `640` permissions -- never accessible via the web
-- **CSRF protection**: The DKIM generation endpoint uses Symfony's built-in CSRF token validation
-- **Authentication**: The Mail tab inherits CloudPanel's session-based authentication -- only logged-in CloudPanel users can access it
-- **Input validation**: Domain names are taken from CloudPanel's own site entity (database), not from user input
+- **No credentials stored centrally**: Per-site configuration and SSH keys live in the site user's home directory
+- **SSH private keys**: Stored under `/home/<siteUser>/.ssh/` with `600` permissions -- never accessible via the web
+- **Configuration files**: `git-config.json` and deploy scripts are owned by the site user and readable only by that user
+- **Authentication**: The Git tab inherits CloudPanel's session-based authentication -- only logged-in CloudPanel users can access it
+- **Input validation**: Filenames are sanitized with `preg_replace('/[^a-zA-Z0-9_-]/', '', $filename)` to prevent path traversal
+- **Command execution**: The controller uses `shell_exec()` and `sudo` with user-supplied values. The Git tab is intended as a privileged administrator feature.
 
 ---
 
 ## Background & Motivation
 
-CloudPanel deliberately does not include email features -- and that is a reasonable design decision to keep the panel lightweight. However, many CloudPanel users host WordPress sites, contact forms, or web applications that need to send transactional emails reliably. Without DKIM, SPF, and DMARC, those emails frequently land in spam.
+CloudPanel deliberately does not include Git deployment features -- and that is a reasonable design decision to keep the panel lightweight. However, many CloudPanel users need a simple, integrated way to deploy code from private Git repositories without manually managing SSH keys and scripts on the server.
 
-This addon was born out of that exact need: a real-world hosting setup for [Tierheim Hannover](https://www.tierheim-hannover.de/) where outbound email authentication was required but no CloudPanel-native solution existed.
-
-### Related CloudPanel Discussions
-
-This addon addresses several long-standing requests in the CloudPanel community:
-
-- [E-mail server support](https://github.com/cloudpanel-io/cloudpanel-ce/discussions/109) -- CloudPanel's official stance: "No email planned." This addon respects that by not adding a mail server, only outbound authentication.
-- [SMTP relay service for emails](https://github.com/cloudpanel-io/cloudpanel-ce/discussions/211) -- Request for SMTP relay integration. This addon works alongside any relay setup.
-- [Developer extensions](https://github.com/cloudpanel-io/cloudpanel-ce/discussions/465) -- Request for a plugin/extension system. This addon demonstrates that CloudPanel's Symfony architecture can be extended with self-repairing addons.
-- [Add Setup Mail Server SPF and DKIM](https://feature-requests.cloudpanel.io/posts/257/add-setup-mail-server-spf-and-dkim) -- The exact feature request this addon fulfills.
-- [Reconsider integration with Email Server](https://feature-requests.cloudpanel.io/posts/437/reconsider-integration-with-email-server) -- Users asking CloudPanel to reconsider. This addon offers a community-driven alternative.
-- [Plugins/Addons ability](https://feature-requests.cloudpanel.io/posts/66/plugins-addons-ability) -- 26+ votes for a plugin system. This addon is a working proof of concept.
+This addon was born out of that exact need: a streamlined Git workflow inside CloudPanel, with per-site SSH keys, configuration persistence, and automatic survival across CloudPanel updates.
 
 ---
 
@@ -222,7 +230,7 @@ This addon addresses several long-standing requests in the CloudPanel community:
 
 Contributions are welcome. Please open an issue before submitting large changes.
 
-If you find this addon useful, consider sharing it in the discussions linked above -- the more CloudPanel users know about it, the better.
+If you find this addon useful, consider sharing it with other CloudPanel users.
 
 ---
 
@@ -234,4 +242,6 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 ## Credits
 
-Built by [Saskia Teichmann](https://github.com/s-a-s-k-i-a). Developed for real-world use at [Tierheim Hannover](https://www.tierheim-hannover.de/).
+Built by [Jefrien](https://github.com/Jefrien).
+
+This Git addon is based on the original [CloudPanel Mail Addon](https://github.com/s-a-s-k-i-a/cloudpanel-mail-addon) by [Saskia Teichmann](https://github.com/s-a-s-k-i-a). The addon structure, installer pattern, and CloudPanel integration approach were adapted from that project.
