@@ -401,6 +401,10 @@ cmd_update() {
     echo "Replacing addon files..."
     cp -a "${extracted_dir}"/* "$ADDON_DIR/"
 
+    # GitHub tarballs may not preserve executable permissions; restore them
+    chmod +x "$ADDON_DIR/scripts/clp-git-addon"
+    chmod +x "$ADDON_DIR/bump-version.sh"
+
     # Cleanup
     rm -rf "$tmp_dir"
 
