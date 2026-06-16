@@ -136,32 +136,53 @@ install_webhook_binary() {
 
     echo "Downloading latest webhook release from GitHub..."
 
+    # Auto-detect architecture, defaulting to amd64
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64)  arch_suffix='linux-amd64' ;;
+        aarch64) arch_suffix='linux-arm64' ;;
+        armv7l)  arch_suffix='linux-arm' ;;
+        *)       arch_suffix='linux-amd64' ;;
+    esac
+
     local asset_url
-    asset_url=$(curl -sL https://api.github.com/repos/adnanh/webhook/releases/latest | \
+    asset_url=$(curl -sL -A 'clp-git-addon' https://api.github.com/repos/adnanh/webhook/releases/latest | \
         grep '"browser_download_url":' | \
-        grep 'linux-amd64.tar.gz' | \
+        grep "$arch_suffix.tar.gz" | \
         head -1 | \
         sed -E 's/.*"browser_download_url": "([^"]+)".*/\1/')
 
     if [ -z "$asset_url" ]; then
-        log_err "Could not determine latest webhook download URL"
+        log_err "Could not determine latest webhook download URL for architecture: $arch_suffix"
         return 1
     fi
+
+    log_ok "Resolved download URL: $asset_url"
 
     local tmp_dir
     tmp_dir=$(mktemp -d)
     local tarball="$tmp_dir/webhook.tar.gz"
 
-    curl -sL "$asset_url" -o "$tarball"
-
-    if [ ! -s "$tarball" ]; then
+    if ! curl -sL -A 'clp-git-addon' "$asset_url" -o "$tarball"; then
         log_err "Failed to download webhook tarball"
         rm -rf "$tmp_dir"
         return 1
     fi
 
+    if [ ! -s "$tarball" ]; then
+        log_err "Downloaded webhook tarball is empty"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
     mkdir -p "$WEBHOOK_DIR"
-    tar xzf "$tarball" -C "$tmp_dir"
+    if ! tar xzf "$tarball" -C "$tmp_dir"; then
+        log_err "Failed to extract webhook tarball"
+        file "$tarball"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
 
     # The tarball may contain the binary at the root or inside a subdirectory
     local extracted_bin
@@ -169,6 +190,8 @@ install_webhook_binary() {
 
     if [ -z "$extracted_bin" ]; then
         log_err "Could not find webhook binary in downloaded archive"
+        echo "Extracted contents:"
+        find "$tmp_dir" -type f -o -type d
         rm -rf "$tmp_dir"
         return 1
     fi
