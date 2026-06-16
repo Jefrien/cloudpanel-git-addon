@@ -151,10 +151,9 @@ install_webhook_binary() {
 
     local asset_url
     asset_url=$(curl -sL -A 'clp-git-addon' https://api.github.com/repos/adnanh/webhook/releases/latest | \
-        grep '"browser_download_url":' | \
+        grep -oP '"browser_download_url":\s*"\K[^"]+' | \
         grep "$arch_suffix.tar.gz" | \
-        head -1 | \
-        sed -E 's/.*"browser_download_url": "([^"]+)".*/\1/')
+        head -1)
 
     if [ -z "$asset_url" ]; then
         log_err "Could not determine latest webhook download URL for architecture: $arch_suffix"
