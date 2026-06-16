@@ -329,19 +329,21 @@ cmd_install() {
 
 cmd_update() {
     check_root
-    echo "Checking for latest CloudPanel Git Addon release..."
+    echo "Checking for latest CloudPanel Git Addon tag..."
     echo ""
 
+    # GitHub tags API (works even when no GitHub Releases are created)
     local latest_tag
-    latest_tag=$(curl -sL -A 'clp-git-addon' https://api.github.com/repos/Jefrien/cloudpanel-git-addon/releases/latest | \
-        grep -oP '"tag_name":\s*"\K[^"]+')
+    latest_tag=$(curl -sL -A 'clp-git-addon' https://api.github.com/repos/Jefrien/cloudpanel-git-addon/tags | \
+        grep -oP '"name":\s*"\K[^"]+' | \
+        head -n 1)
 
     if [ -z "$latest_tag" ]; then
-        log_err "Could not determine latest release from GitHub"
+        log_err "Could not determine latest tag from GitHub"
         exit 1
     fi
 
-    log_ok "Latest release: $latest_tag"
+    log_ok "Latest tag: $latest_tag"
 
     local current_version
     current_version=$(cat "$ADDON_DIR/VERSION" 2>/dev/null || echo "unknown")
