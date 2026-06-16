@@ -1,0 +1,392 @@
+{% extends 'Frontend/layout.html.twig' %}
+
+{% block pageTitle %}{% trans %}Git{% endtrans %}{% endblock %}
+
+{%- block stylesheets -%}
+{{ parent() }}
+<link href="{{ asset('/assets/css/frontend/site.css') }}" rel="stylesheet">
+{% endblock %}
+
+{%- block javascript -%}
+{{ parent() }}
+<script type="text/javascript" src="{{ asset('/assets/js/ace.min.js') }}"></script>
+{% endblock %}
+
+{% block body %}
+
+
+
+<div class="container-fluid container-limited-width" id="app-git">
+
+    <div class="modal fade" id="new-ssh-key-modal" tabindex="-1" aria-labelledby="newSshKeyModalLabel"
+        aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h1 class="modal-title fs-5" id="newSshKeyModalLabel">Generate SSH Key</h1>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Fill in the form to generate a new SSH key.</p>
+                    <form @submit.prevent="handleGenerateSshKey">
+                        <div class="mb-3">
+                            <label for="email" class="form-label">Email address</label>
+                            <input type="email" class="form-control" id="email" v-model="ssh_email">
+                            <span class="badge bg-danger" v-if="errors.email" v-text="errors.email"></span>
+                        </div>
+                        <div class="mb-3">
+                            <label for="name" class="form-label">Key name</label>
+                            <input type="text" class="form-control" id="name" value="id_ed25519" v-model="ssh_name">
+                            <span class="badge bg-danger" v-if="errors.name" v-text="errors.name"></span>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" @click="handleGenerateSshKey">Generate</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="site-container">
+        {{ include('Frontend/Site/Partial/site-info.html.twig', {'site': site}) }}
+        <div class="site-content-container">
+            {{ include('Frontend/Site/Partial/tab-container.html.twig', {'active': 'git', 'site': site}) }}
+            {{ include('Partial/flash-messages.html.twig', { 'flashBagMessages': app.session.flashbag.all }) }}
+            <div v-if="notification.message" :class="'alert alert-' + notification.type" role="alert"
+                v-text="notification.message"></div>
+            <div class="site-content">
+
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between">
+                        {% trans %}Git Manager{% endtrans %}
+                        <div>
+                            <button v-if="gitBranch" class="btn btn-md btn-outline-secondary me-2">Logs</button>
+                            <button v-if="gitBranch" class="btn btn-md btn-blue" @click="handleDeploy">Deploy
+                                Now</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+
+                        <div class="row">
+                            <div class="col-12">
+                                <div class="row mb-1">
+                                    <div class="col">
+                                        <label class="col-form-label" for="public-key">SSH Key</label>
+                                    </div>
+                                    <div class="col text-end">
+                                        <button class="btn btn-sm btn-outline-dark" id="btn-generate-key"
+                                            @click="myModal.show()">
+                                            <span v-if="loading" class="spinner-border spinner-border-sm me-2"
+                                                role="status" aria-hidden="true"></span>
+                                            <span v-if="loading">Loading...</span>
+                                            <span v-else>Generate a new key</span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <textarea class="form-control form-control-lg mb-2" id="public-key" rows="2"
+                                    v-text="defaultKey"></textarea>
+                                <div class="form-text">
+                                    Copy this public key to your Git repository's deploy keys.
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-12">
+                                <label class="col-form-label" for="git-url">Git URL</label>
+                                <input type="text" class="form-control" id="git-url" v-model="gitUrl">
+                                <div class="form-text">
+                                    Enter the URL of your Git repository (e.g., git@github.com:username/repository.git).
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col">
+                                <button class="btn btn-outline-dark" @click.prevent="handleTestConnection">
+                                    Test Connection
+                                </button>
+                            </div>
+                            <div class="col text-end">
+                                <div v-if="testConnectionResult"
+                                    :class="testConnectionResult.ok ? 'text-success' : 'text-danger'"
+                                    v-text="testConnectionResult.message">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row" v-if="branches.length > 0">
+                            <div class="col-12">
+                                <label class="col-form-label" for="git-branch">Git Branch</label>
+                                <select class="form-select" aria-label="Select branch" v-model="gitBranch">
+                                    <option selected>Select branch</option>
+                                    <option v-for="branch in branches" :value="branch" :key="branch"
+                                        :selected="branch === gitBranch" v-text="branch"></option>
+                                </select>
+                                <div class="form-text">
+                                    Select the branch to deploy.
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row" v-if="branches.length > 0 || deployPath">
+                            <div class="col-12">
+                                <label class="col-form-label" for="git-branch">Deploy Path</label>
+                                <input type="text" class="form-control" v-model="deployPath">
+                                <div class="form-text">
+                                    Enter the deploy path.
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row" v-show="branches.length > 0 || deployScript">
+                            <div class="col-12">
+                                <label class="col-form-label" for="git-branch">Deploy Script</label>
+                                <textarea class="form-control" id="editor" rows="3"></textarea>
+                                <div class="form-text">
+                                    Enter the deploy script in bash format.
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-12 text-end">
+                                <button class="btn btn-blue btn-lg" id="btn-save-git" @click="handleSave">
+                                    {% trans %}Save{% endtrans %}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+
+            </div>
+        </div>
+    </div>
+</div>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script>
+    const { createApp, ref, onMounted } = Vue
+
+    createApp({
+        setup() {
+            // ============================================
+            // UI State References
+            // ============================================
+            const myModal = ref(null)
+            const editor = ref(null)
+            const notification = ref({ type: '', message: '' })
+
+            // ============================================
+            // Configuration State References
+            // ============================================
+            const defaultKey = ref('{{ defaultKey.public_key }}')
+            const gitUrl = ref('{{ config.repo_url|default(gitUrl) }}')
+            const gitBranch = ref('{{ config.branch|default("main") }}')
+            const errors = ref({})
+            const branches = ref(['{{ config.branch|default("main") }}'])
+            const deployPath = ref('{{ config.deploy_path|default(rootDirectory) }}')
+            const deployScript = ref('{{ config.deploy_script|default("#!/bin/bash\n\n# Your deployment script here")|escape("js") }}')
+
+            // ============================================
+            // SSH Key Generation State References
+            // ============================================
+            const ssh_email = ref('')
+            const ssh_name = ref('id_ed25519_{{ site.domainName }}')
+
+            // ============================================
+            // Loading and Test State
+            // ============================================
+            const loading = ref(false)
+            const testConnectionResult = ref(null)
+
+            // ============================================
+            // Helper Functions
+            // ============================================
+
+            /**
+             * Display a notification message to the user
+             * Automatically clears after 5 seconds
+             * @param {string} type - Notification type (success, danger, etc.)
+             * @param {string} message - The notification message
+             */
+            function showNotification(type, message) {
+                notification.value = { type, message }
+                setTimeout(() => {
+                    notification.value = { type: '', message: '' }
+                }, 5000)
+            }
+
+            /**
+             * Initialize the Ace editor with bash mode and proper settings
+             * Configures the editor for script editing with auto-scroll and line limits
+             * Syncs editor content with deployScript ref
+             */
+            function loadVhostEditor() {
+                editor.value.session.setMode('ace/mode/sh');
+                editor.value.setValue(deployScript.value, -1);
+                editor.value.clearSelection();
+                editor.value.setAutoScrollEditorIntoView(true);
+                editor.value.setOptions({ minLines: 30, maxLines: Infinity });
+                editor.value.on('change', () => {
+                    deployScript.value = editor.value.getValue();
+                });
+            }
+
+            // ============================================
+            // Event Handlers
+            // ============================================
+
+            /**
+             * Save Git configuration to the server
+             * Sends repo URL, branch, deploy path, and deploy script
+             */
+            const handleSave = async () => {
+                loading.value = true
+
+                const response = await fetch("{{ path('clp_site_git_save_config', {'domainName': site.domainName}) }}", {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        repo_url: gitUrl.value,
+                        branch: gitBranch.value,
+                        deploy_path: deployPath.value,
+                        deploy_script: deployScript.value
+                    })
+                })
+
+                const data = await response.json()
+                console.log(data)
+                if (data.success) {
+                    showNotification('success', 'Git configuration saved successfully')
+                } else {
+                    showNotification('danger', 'Failed to save git configuration: ' + data.message)
+                }
+                loading.value = false
+            }
+
+            /**
+             * Generate a new SSH key pair
+             * Validates form, sends request to backend, and updates UI with new key
+             */
+            const handleGenerateSshKey = async () => {
+                loading.value = true
+
+                errors.value = {}
+                // validate email
+                if (!ssh_email.value) {
+                    errors.value.email = 'Email is required'
+                }
+
+                // validate name
+                if (!ssh_name.value) {
+                    errors.value.name = 'Name is required'
+                }
+
+                if (Object.keys(errors.value).length > 0) {
+                    loading.value = false
+                    return
+                }
+
+                myModal.value.hide()
+
+                const response = await fetch("{{ path('clp_site_git_generate_key', {'domainName': site.domainName}) }}", {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        domainName: '{{ site.domainName }}',
+                        email: ssh_email.value,
+                        filename: ssh_name.value
+                    })
+                })
+
+                const data = await response.json()
+                console.log(data)
+                if (!data.success) {
+                    showNotification('danger', data.message)
+                    loading.value = false
+                    return
+                }
+                showNotification('success', 'SSH key generated successfully')
+                defaultKey.value = data.public_key
+                loading.value = false
+            }
+
+            /**
+             * Test SSH connection to Git repository
+             * Validates connection and fetches available branches if successful
+             */
+            const handleTestConnection = async () => {
+                loading.value = true
+
+                const response = await fetch("{{ path('clp_site_git_test_connection', {'domainName': site.domainName}) }}", {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        domainName: '{{ site.domainName }}',
+                        key: defaultKey.value,
+                        repo_url: gitUrl.value
+                    })
+                })
+
+                const data = await response.json()
+                console.log(data)
+                testConnectionResult.value = data
+                if (data.ok) {
+                    branches.value = data.branches.branches.map(branch => branch.name)
+                    gitBranch.value = data.branches.default_branch
+                }
+                loading.value = false
+            }
+
+            // ============================================
+            // Lifecycle Hook
+            // ============================================
+
+            /**
+             * Initialize component on mount
+             * Sets up Bootstrap modal and Ace editor
+             */
+            onMounted(() => {
+                myModal.value = new bootstrap.Modal(document.getElementById('new-ssh-key-modal'), {})
+
+                editor.value = ace.edit('editor');
+                loadVhostEditor();
+            })
+
+            // ============================================
+            // Return reactive references and methods
+            // ============================================
+            return {
+                // UI State
+                myModal,
+                notification,
+
+                // Configuration
+                defaultKey,
+                gitUrl,
+                gitBranch,
+                deployPath,
+                deployScript,
+                testConnectionResult,
+                branches,
+
+                // SSH Key Generation
+                ssh_email,
+                ssh_name,
+                errors,
+
+                // Loading State
+                loading,
+
+                // Methods
+                handleSave,
+                handleGenerateSshKey,
+                handleTestConnection,
+            }
+        }
+    }).mount('#app-git')
+</script>
+{% endblock %}

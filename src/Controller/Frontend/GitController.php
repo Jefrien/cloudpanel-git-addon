@@ -1,0 +1,733 @@
+<?php
+
+namespace App\Controller\Frontend;
+
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Contracts\Translation\TranslatorInterface;
+use App\Controller\Controller;
+use App\Entity\Manager\SiteManager;
+use App\Entity\Manager\UserManager;
+use App\Service\Logger;
+
+class GitController extends Controller
+{
+    private SiteManager $siteEntityManager;
+    private UserManager $userManager;
+    private string $sshDir;
+    private string $configDir;
+    private string $homeDir;
+    private string $siteDir;
+    private string $siteUser;
+
+    public function __construct(
+        TranslatorInterface $translator,
+        Logger $logger,
+        SiteManager $siteEntityManager,
+        UserManager $userManager
+    ) {
+        parent::__construct($translator, $logger);
+        $this->siteEntityManager = $siteEntityManager;
+        $this->userManager = $userManager;
+        $this->sshDir = $_SERVER['HOME'] . '/.ssh';
+        $this->homeDir = $_SERVER['HOME'];
+    }
+
+    /**
+     * Initialize configuration for a specific domain
+     *
+     * Sets up the site user, directory paths, and SSH configuration file.
+     * Creates the config file and directory if they don't exist.
+     * Config file is stored in the user's home directory.
+     * All file operations are performed as the site user.
+     *
+     * @param string $domain The domain name to initialize configuration for
+     * @return void
+     */
+    private function initConfig($domain) {
+        $siteEntity = $this->siteEntityManager->findOneByDomainName($domain);
+        $this->siteUser = $siteEntity->getUser();
+        $this->siteDir = "/home/{$siteEntity->getUser()}/htdocs/{$siteEntity->getRootDirectory()}";
+        $this->sshDir = "/home/{$siteEntity->getUser()}/.ssh";
+
+        $this->configDir = "/home/{$siteEntity->getUser()}/git-config.json";
+
+        // Check if config file exists as the site user
+        if (!$this->fileExistsAsUser($this->configDir)) {
+            // Create empty config file as the site user using tee
+            $createCommand = sprintf(
+                'sudo -u %s bash -c \'echo "{}" > %s\'',
+                escapeshellarg($this->siteUser),
+                escapeshellarg($this->configDir)
+            );
+            $output = shell_exec($createCommand . ' 2>&1');
+
+            // Set proper permissions
+            $chmodCmd = sprintf(
+                'sudo -u %s chmod 600 %s',
+                escapeshellarg($this->siteUser),
+                escapeshellarg($this->configDir)
+            );
+            shell_exec($chmodCmd . ' 2>&1');
+        }
+    }
+
+    /**
+     * Get the home directory path for a specific domain
+     *
+     * Constructs the htdocs directory path for the site user.
+     *
+     * @param string $domain The domain name to get the home directory for
+     * @return string The home directory path
+     */
+    private function getHomeDirectory($domain): string
+    {
+        $siteEntity = $this->siteEntityManager->findOneByDomainName($domain);
+        $path = '/home/';
+        $user = $siteEntity->getUser() . '/htdocs';
+        return $path . $user;
+    }
+
+    /**
+     * Display the Git configuration page
+     */
+    public function index(Request $request, string $domainName): Response
+    {
+        $this->initConfig($domainName);
+        $siteEntity = $this->siteEntityManager->findOneByDomainName($domainName);
+        $defaultKey = $this->getDefaultKey($domainName);
+        $config = $this->getConfig($domainName);
+
+        return $this->render('Frontend/Site/git.html.twig', [
+            'site' => $siteEntity,
+            'defaultKey' => $defaultKey,
+            'gitUrl' => '',
+            'config' => $config,
+            'rootDirectory' => $this->siteDir
+        ]);
+    }
+
+    /**
+     * Save SSH configuration to the config file
+     *
+     * Stores the configuration array as JSON with proper permissions.
+     * Merges with existing configuration to preserve other fields.
+     * The config file is saved in the user's home directory as the site user.
+     *
+     * @param array $config The configuration array to save
+     * @param string $domainName The domain name for the configuration
+     * @return void
+     */
+    public function saveConfig(array $config, string $domainName): void
+    {
+        $this->initConfig($domainName);
+        $file = $this->configDir;
+
+        // Get existing config and merge with new config
+        $existingConfig = $this->getConfig($domainName) ?? [];
+        $mergedConfig = array_merge($existingConfig, $config);
+
+        // Avoid saving the dynamic deploy_script content in the json file
+        unset($mergedConfig['deploy_script']);
+
+        // Encode config to JSON
+        $jsonContent = json_encode($mergedConfig, JSON_PRETTY_PRINT);
+
+        // Write directly using bash as the site user
+        $writeCmd = sprintf(
+            'sudo -u %s bash -c \'cat > %s << EOF
+%s
+EOF\'',
+            escapeshellarg($this->siteUser),
+            escapeshellarg($file),
+            $jsonContent
+        );
+        shell_exec($writeCmd . ' 2>&1');
+
+        // Set proper permissions as the site user
+        $chmodCmd = sprintf(
+            'sudo -u %s chmod 600 %s',
+            escapeshellarg($this->siteUser),
+            escapeshellarg($file)
+        );
+        shell_exec($chmodCmd . ' 2>&1');
+    }
+
+    /**
+     * Retrieve SSH configuration from the config file
+     *
+     * Reads and decodes the JSON configuration file for the specified domain.
+     * File is read as the site user to avoid permission issues.
+     *
+     * @param string $domainName The domain name to get configuration for
+     * @return array|null The configuration array or null if file doesn't exist
+     */
+    public function getConfig(string $domainName): ?array
+    {
+        $this->initConfig($domainName);
+        $file = $this->configDir;
+
+        // Check if file exists as the site user
+        if (!$this->fileExistsAsUser($file)) {
+            return null;
+        }
+
+        // Read file content as the site user
+        $content = $this->readFileAsUser($file);
+        $config = json_decode($content, true);
+
+        if (is_array($config) && !empty($config['deploy_script_path'])) {
+            $scriptPath = $config['deploy_script_path'];
+            if ($this->fileExistsAsUser($scriptPath)) {
+                $config['deploy_script'] = $this->readFileAsUser($scriptPath);
+            }
+        }
+
+        return $config;
+    }
+
+    /**
+     * Generate a new SSH key pair
+     */
+    public function generateKey(Request $request, string $domainName): JsonResponse
+    {
+        $this->initConfig($domainName);
+
+        $data = json_decode($request->getContent(), true);
+        $email = $data['email'] ?? 'user@localhost';
+        $filename = $data['filename'] ?? 'id_ed25519_' . $domainName;
+        $comment = $data['comment'] ?? $email;
+
+
+        // Sanitizar filename para evitar path traversal
+        $filename = preg_replace('/[^a-zA-Z0-9_-]/', '', $filename);
+        $keyPaths = $this->getKeyPaths($filename);
+        $privatePath = $keyPaths['private'];
+        $publicPath = $keyPaths['public'];
+
+        // create .ssh directory if it doesn't exist
+        if (!is_dir($this->sshDir)) {
+            $mkdirCmd = sprintf(
+                'sudo -u %s mkdir -p %s && sudo -u %s chmod 700 %s',
+                escapeshellarg($this->siteUser),
+                escapeshellarg($this->sshDir),
+                escapeshellarg($this->siteUser),
+                escapeshellarg($this->sshDir)
+            );
+
+            shell_exec($mkdirCmd . ' 2>&1');
+        }
+
+        // prevent recreate key
+        if (file_exists($privatePath)) {
+            return $this->json([
+                'success' => false,
+                'path' => $privatePath,
+                'message' => 'Key with name ' . $filename . ' already exists'
+            ]);
+        }
+
+        // generate ssh key
+        $command = sprintf(
+            'sudo -u %s ssh-keygen -t ed25519 -C %s -f %s -N ""',
+            escapeshellarg($this->siteUser),
+            escapeshellarg($comment),
+            escapeshellarg($privatePath)
+        );
+
+        // Using shell_exec (as you requested)
+        $output = shell_exec($command . ' 2>&1');
+        $returnCode = 0;
+
+        // Alternative with exec to capture return code
+        // exec($command . ' 2>&1', $outputArray, $returnCode);
+        // $output = implode("\n", $outputArray);
+
+        // wait
+        sleep(2);
+
+        if (!$this->fileExistsAsUser($publicPath)) {
+            return $this->json([
+                'success' => false,
+                'message' => 'Error generating key',
+                'path' => $privatePath,
+                'output' => $output
+            ], 500);
+        }
+
+        // Ensure correct permissions
+        $this->ensureKeyPermissions($privatePath, $publicPath);
+
+        $publicKey = $this->readFileAsUser($publicPath);
+
+        // save the key to the config file
+        $config = [
+            'filename' => $filename
+        ];
+        $this->saveConfig($config, $domainName);
+
+        return $this->json([
+            'success' => true,
+            'message' => 'Key generated successfully',
+            'type' => 'ed25519',
+            'filename' => $filename,
+            'public_key' => $publicKey,
+            'private_path' => $privatePath,
+            'fingerprint' => $this->getFingerprint($privatePath)
+        ]);
+    }
+
+    /**
+     * Execute a shell command as the site user
+     *
+     * Runs the specified command using sudo to switch to the site user context.
+     * This ensures file operations are performed with the correct user permissions.
+     *
+     * @param string $command The shell command to execute
+     * @return string The command output
+     */
+    private function runAsUser(string $command): string
+    {
+        $cmd = sprintf(
+            'sudo -u %s bash -c %s 2>&1',
+            escapeshellarg($this->siteUser),
+            escapeshellarg($command)
+        );
+        return shell_exec($cmd) ?? '';
+    }
+
+    /**
+     * Read a file's contents as the site user
+     *
+     * Reads the specified file using cat command executed as the site user.
+     *
+     * @param string $path The path to the file to read
+     * @return string The file contents
+     */
+    private function readFileAsUser(string $path): string
+    {
+        return $this->runAsUser("cat " . escapeshellarg($path));
+    }
+
+    /**
+     * Check if a file exists as the site user
+     *
+     * Verifies file existence in the site user context, not as www-data.
+     * This is important for checking SSH key files that belong to the site user.
+     *
+     * @param string $path The path to check
+     * @return bool True if the file exists, false otherwise
+     */
+    private function fileExistsAsUser(string $path): bool
+    {
+        $output = $this->runAsUser("test -f " . escapeshellarg($path) . " && echo YES || echo NO");
+        return trim($output) === 'YES';
+    }
+
+    /**
+     * Get sanitized SSH key paths
+     *
+     * Sanitizes the key filename to prevent path traversal attacks and
+     * returns both private and public key paths.
+     *
+     * @param string $keyFile The key filename
+     * @return array Array containing 'private' and 'public' key paths
+     */
+    private function getKeyPaths(string $keyFile): array
+    {
+        $filename = preg_replace('/[^a-zA-Z0-9_-]/', '', $keyFile);
+        return [
+            'private' => $this->sshDir . '/' . $filename,
+            'public' => $this->sshDir . '/' . $filename . '.pub'
+        ];
+    }
+
+    /**
+     * Ensure correct permissions for SSH keys
+     *
+     * Sets proper file permissions: 600 for private key (read/write only for owner)
+     * and 644 for public key (read/write for owner, read for others).
+     *
+     * @param string $privatePath Path to the private key file
+     * @param string $publicPath Path to the public key file
+     * @return void
+     */
+    private function ensureKeyPermissions(string $privatePath, string $publicPath): void
+    {
+        $this->runAsUser("chmod 644 " . escapeshellarg($publicPath));
+        $this->runAsUser("chmod 600 " . escapeshellarg($privatePath));
+    }
+
+    /**
+     * Execute git command with SSH configuration
+     *
+     * Runs a git command using the specified SSH private key for authentication.
+     * Handles SSH options including host key checking and identity file specification.
+     * Automatically retries without StrictHostKeyChecking if a host key warning appears.
+     * Changes to a temporary directory to avoid permission issues with site directories.
+     *
+     * @param string $gitCommand The git command to execute (e.g., 'git ls-remote')
+     * @param string $repoUrl The repository URL
+     * @param string $privateKey Path to the SSH private key
+     * @param bool $acceptNewHost Whether to accept new host keys (default: true)
+     * @return string The command output
+     */
+    private function executeGitCommand(string $gitCommand, string $repoUrl, string $privateKey, bool $acceptNewHost = true): string
+    {
+        $sshOptions = '-o IdentitiesOnly=yes';
+        if ($acceptNewHost) {
+            $sshOptions .= ' -o StrictHostKeyChecking=accept-new';
+        }
+
+        // Use the user's actual home directory instead of site directory to avoid permission issues
+        $userHome = "/home/{$this->siteUser}";
+        $tmpDir = "{$userHome}/tmp";
+
+        // Create temp directory if it doesn't exist
+        $this->runAsUser("mkdir -p " . escapeshellarg($tmpDir));
+
+        $cmd = sprintf(
+            'sudo -u %s bash -c \'cd %s && HOME=%s GIT_SSH_COMMAND="ssh -i %s %s" %s %s\' 2>&1',
+            escapeshellarg($this->siteUser),
+            escapeshellarg($tmpDir),
+            escapeshellarg($userHome),
+            escapeshellarg($privateKey),
+            $sshOptions,
+            $gitCommand,
+            escapeshellarg($repoUrl)
+        );
+
+        $output = shell_exec($cmd);
+
+        // Retry without StrictHostKeyChecking if warning appears
+        if ($acceptNewHost && strpos($output, 'Warning: Permanently added') !== false) {
+            $cmd = sprintf(
+                'sudo -u %s bash -c \'cd %s && HOME=%s GIT_SSH_COMMAND="ssh -i %s -o IdentitiesOnly=yes" %s %s\' 2>&1',
+                escapeshellarg($this->siteUser),
+                escapeshellarg($tmpDir),
+                escapeshellarg($userHome),
+                escapeshellarg($privateKey),
+                $gitCommand,
+                escapeshellarg($repoUrl)
+            );
+            $output = shell_exec($cmd);
+        }
+
+        return $output;
+    }
+
+    /**
+     * Validate that an SSH key exists and return its paths
+     *
+     * Checks if the public key file exists for the given key filename.
+     * Returns the key paths if valid, null otherwise.
+     *
+     * @param string $keyFile The key filename to validate
+     * @return array|null Array with key paths if valid, null if key doesn't exist
+     */
+    private function validateKeyExists(string $keyFile): ?array
+    {
+        $keyPaths = $this->getKeyPaths($keyFile);
+
+        if (!$this->fileExistsAsUser($keyPaths['public'])) {
+            return null;
+        }
+
+        return $keyPaths;
+    }
+
+
+    /**
+     * Test SSH connection to a Git repository
+     *
+     * Validates that the configured SSH key can successfully authenticate
+     * with the specified Git repository. Returns branch information if successful.
+     *
+     * @param Request $request The HTTP request containing repo_url in JSON body
+     * @param string $domainName The domain name to test SSH for
+     * @return JsonResponse JSON response with test results and branch information
+     */
+    public function testGit(Request $request, string $domainName): JsonResponse
+    {
+        $this->initConfig($domainName);
+        $data = json_decode($request->getContent(), true);
+
+        $keyConfig = $this->getConfig($domainName);
+        $keyFile = $keyConfig['filename'];
+
+        $keyPaths = $this->validateKeyExists($keyFile);
+
+        if (!$keyPaths) {
+            return $this->json([
+                'ok' => false,
+                'message' => 'Private key not found',
+                'suggestion' => 'Generate an SSH key first'
+            ]);
+        }
+
+        // ensure correct permissions
+        $this->runAsUser("chmod 600 " . escapeshellarg($keyPaths['private']));
+
+        // URL of the repo (if provided, test against that specific repo)
+        $repoUrl = $data['repo_url'] ?? null;
+
+        if (!$repoUrl) {
+            return $this->json([
+                'ok' => false,
+                'message' => 'No repo URL provided',
+                'suggestion' => 'Provide a repo URL to test'
+            ]);
+        }
+
+        $output = $this->executeGitCommand('git ls-remote', $repoUrl . ' HEAD', $keyPaths['private']);
+
+        if (preg_match('/^[a-f0-9]{40}\s+HEAD/', $output)) {
+            $branches = $this->fetchBranches($request, $domainName);
+            return $this->json([
+                'ok' => true,
+                'message' => '✅ SSH works correctly',
+                'key' => $keyFile,
+                'repo_tested' => $repoUrl,
+                'output' => trim($output),
+                'branches' => $branches
+            ]);
+        }
+
+        return $this->json([
+            'ok' => false,
+            'message' => 'SSH test failed',
+            'key' => $keyFile,
+            'private' => $keyPaths['private'],
+            'repo_tested' => $repoUrl,
+            'output' => trim($output)
+        ]);
+    }
+
+    /**
+     * Fetch all branches from a Git repository
+     *
+     * Retrieves the list of all branches from the specified repository using SSH authentication.
+     * Identifies the default branch (main or master) and returns branch information including hashes.
+     *
+     * @param Request $request The HTTP request containing repo_url in JSON body
+     * @param string $domainName The domain name to fetch branches for
+     * @return array Array containing branch information with names, hashes, and default branch
+     */
+    public function fetchBranches(Request $request, string $domainName) {
+        $this->initConfig($domainName);
+
+        $keyConfig = $this->getConfig($domainName);
+        $keyFile = $keyConfig['filename'];
+
+        $keyPaths = $this->getKeyPaths($keyFile);
+        $data = json_decode($request->getContent(), true);
+        $repoUrl = $data['repo_url'] ?? null;
+
+        $output = $this->executeGitCommand('git ls-remote --heads', $repoUrl, $keyPaths['private']);
+
+        $branches = [];
+        $lines = explode("\n", trim($output));
+
+        foreach ($lines as $line) {
+            if (preg_match('/^([a-f0-9]{40})\s+refs\/heads\/(.+)$/', trim($line), $matches)) {
+                $branches[] = [
+                    'name' => $matches[2],
+                    'hash' => $matches[1],
+                    'default' => $matches[2] === 'main' || $matches[2] === 'master'
+                ];
+            }
+        }
+
+        // detect default (main or master)
+        $defaultBranch = null;
+        foreach ($branches as $branch) {
+            if ($branch['default']) {
+                $defaultBranch = $branch['name'];
+                break;
+            }
+        }
+
+        return [
+            'ok' => true,
+            'repo' => $repoUrl,
+            'default_branch' => $defaultBranch,
+            'branches' => $branches,
+            'count' => count($branches)
+        ];
+    }
+
+    /**
+     * Get the fingerprint of an SSH key
+     *
+     * Extracts the SHA256 fingerprint from an SSH private key using ssh-keygen.
+     * The fingerprint is useful for verifying key identity.
+     *
+     * @param string $privatePath Path to the SSH private key file
+     * @return string|null The key fingerprint in format 'aa:bb:cc:...' or null if not found
+     */
+    private function getFingerprint(string $privatePath): ?string
+    {
+        $output = shell_exec('ssh-keygen -lf ' . escapeshellarg($privatePath) . ' 2>&1');
+
+        if (preg_match('/([a-f0-9]{2}:){15}[a-f0-9]{2}/', $output, $matches)) {
+            return $matches[0];
+        }
+
+        return null;
+    }
+
+    /**
+     * Get the default SSH public key
+     */
+    public function getDefaultKey(string $domainName): array
+    {
+        $this->initConfig($domainName);
+        $config = $this->getConfig($domainName);
+
+        if(empty($config['filename'])) {
+            return [
+                'success' => false,
+                'message' => 'No se encontró clave SSH por defecto',
+                'public_key' => null
+            ];
+        }
+
+        $keyPaths = $this->validateKeyExists($config['filename']);
+
+        if (!$keyPaths) {
+            return [
+                'success' => false,
+                'message' => 'No se encontró clave SSH por defecto',
+                'public_key' => null
+            ];
+        }
+
+        $publicKey = trim($this->readFileAsUser($keyPaths['public']));
+
+        return [
+            'success' => true,
+            'type' => str_contains($keyPaths['private'], 'ed25519') ? 'ed25519' : 'rsa',
+            'path' => $keyPaths['public'],
+            'public_key' => $publicKey
+        ];
+    }
+
+    /**
+     * Save Git configuration for a domain
+     *
+     * Saves Git repository configuration including repo URL, branch, deploy path,
+     * and deploy script. The deploy script is saved as a .sh file in the site directory.
+     *
+     * @param Request $request The HTTP request containing git configuration data
+     * @param string $domainName The domain name to save configuration for
+     * @return JsonResponse JSON response with save result
+     */
+    public function saveGitConfig(Request $request, string $domainName): JsonResponse
+    {
+        $this->initConfig($domainName);
+
+        $data = json_decode($request->getContent(), true);
+
+        $repoUrl = $data['repo_url'] ?? null;
+        $branch = $data['branch'] ?? null;
+        $deployPath = $data['deploy_path'] ?? null;
+        $deployScript = $data['deploy_script'] ?? null;
+
+        // Get existing config to preserve key file name
+        $existingConfig = $this->getConfig($domainName) ?? [];
+        $keyFilename = $existingConfig['filename'] ?? null;
+
+        // Save deploy script if provided
+        $deployScriptPath = null;
+        if ($deployScript && !empty(trim($deployScript))) {
+            $deployScriptPath = $this->saveDeployScript($deployScript, $domainName);
+            if (!$deployScriptPath) {
+                return $this->json([
+                    'success' => false,
+                    'message' => 'Failed to save deploy script'
+                ], 500);
+            }
+        }
+
+        // Build configuration array
+        $config = [
+            'repo_url' => $repoUrl,
+            'branch' => $branch,
+            'deploy_path' => $deployPath,
+            'deploy_script_path' => $deployScriptPath,
+            'filename' => $keyFilename
+        ];
+
+        // Remove null values
+        $config = array_filter($config, function($value) {
+            return $value !== null;
+        });
+
+        // Merge with existing config to preserve other fields
+        $config = array_merge($existingConfig, $config);
+
+        // Save configuration
+        $this->saveConfig($config, $domainName);
+
+        return $this->json([
+            'success' => true,
+            'message' => 'Git configuration saved successfully',
+            'config' => $config
+        ]);
+    }
+
+    /**
+     * Save deploy script as a .sh file in the site directory
+     *
+     * Creates a deploy script file with proper permissions in the site's directory.
+     * The script is saved in a .deploy-scripts subdirectory within the site directory.
+     * Uses a temporary file to handle multi-line scripts with special characters.
+     *
+     * @param string $scriptContent The bash script content
+     * @param string $domainName The domain name for the site
+     * @return string|null The path to the saved script or null on failure
+     */
+    private function saveDeployScript(string $scriptContent, string $domainName): ?string
+    {
+        $this->initConfig($domainName);
+
+        $deployScriptsDir = dirname($this->configDir);
+
+        // Generate script filename
+        $scriptFilename = 'deploy-' . $domainName . '.sh';
+        $scriptPath = $deployScriptsDir . '/' . $scriptFilename;
+
+        // Create a temporary file with the script content
+        $tempFile = tempnam(sys_get_temp_dir(), 'deploy-script-');
+        file_put_contents($tempFile, $scriptContent);
+        chmod($tempFile, 0644); // Ensure the site user can read it
+
+        // Copy the temp file to the destination as the site user
+        $copyCmd = sprintf(
+            'sudo -u %s cp %s %s',
+            escapeshellarg($this->siteUser),
+            escapeshellarg($tempFile),
+            escapeshellarg($scriptPath)
+        );
+        $output = shell_exec($copyCmd . ' 2>&1');
+
+        // Remove temp file
+        unlink($tempFile);
+
+        if (!$this->fileExistsAsUser($scriptPath)) {
+            return null;
+        }
+
+        // Set executable permissions
+        $chmodCmd = sprintf(
+            'sudo -u %s chmod +x %s',
+            escapeshellarg($this->siteUser),
+            escapeshellarg($scriptPath)
+        );
+        shell_exec($chmodCmd . ' 2>&1');
+
+        return $scriptPath;
+    }
+
+}
