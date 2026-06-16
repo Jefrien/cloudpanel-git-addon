@@ -189,27 +189,27 @@ class GitController extends Controller
         $debug['new_hooks_count'] = count($hooks);
         $debug['json_content'] = $jsonContent;
 
-        // Try direct write first
-        $written = @file_put_contents($hooksFile, $jsonContent, LOCK_EX);
-        $debug['file_put_contents_result'] = $written;
+        // Primary: write via shell as clp to avoid PHP-FPM user permission quirks
+        $shellCmd = sprintf(
+            'echo %s | sudo -u clp tee %s > /dev/null && sync',
+            escapeshellarg($jsonContent),
+            escapeshellarg($hooksFile)
+        );
+        $shellOutput = shell_exec($shellCmd . ' 2>&1');
+        $debug['shell_output'] = trim($shellOutput ?? '');
 
-        // Fallback: write via shell as clp if direct write failed or wrote 0 bytes
+        // Verify by reading back
+        $verify = @file_get_contents($hooksFile);
+        $debug['verify_after_shell'] = $verify;
+        $written = ($verify === $jsonContent) ? strlen($jsonContent) : false;
+
+        // Fallback: try direct write if shell didn't work
         if ($written === false || $written === 0) {
-            $shellCmd = sprintf(
-                'echo %s | sudo -u clp tee %s > /dev/null',
-                escapeshellarg($jsonContent),
-                escapeshellarg($hooksFile)
-            );
-            $shellOutput = shell_exec($shellCmd . ' 2>&1');
-            $debug['shell_fallback_used'] = true;
-            $debug['shell_output'] = trim($shellOutput ?? '');
-
-            // Verify by reading back
-            $verify = file_get_contents($hooksFile);
-            $debug['verify_after_shell'] = $verify;
-            $written = ($verify === $jsonContent) ? strlen($jsonContent) : false;
+            $debug['shell_failed'] = true;
+            $written = @file_put_contents($hooksFile, $jsonContent, LOCK_EX);
+            $debug['file_put_contents_result'] = $written;
         } else {
-            $debug['shell_fallback_used'] = false;
+            $debug['shell_failed'] = false;
         }
 
         $debug['final_written'] = $written;
