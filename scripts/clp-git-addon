@@ -228,8 +228,6 @@ HOOKS
 }
 
 install_webhook_service() {
-    local service_changed=false
-
     cat > "$WEBHOOK_SERVICE" << SERVICE
 [Unit]
 Description=CloudPanel Git Addon Webhook
@@ -239,7 +237,7 @@ After=network.target
 Type=simple
 User=clp
 Group=clp
-ExecStart=$WEBHOOK_BIN -hooks $WEBHOOK_HOOKS -port $WEBHOOK_PORT -hotreload
+ExecStart=$WEBHOOK_BIN -hooks $WEBHOOK_HOOKS -port $WEBHOOK_PORT -hotreload -nopanic
 Restart=on-failure
 
 [Install]
