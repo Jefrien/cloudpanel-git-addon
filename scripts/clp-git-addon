@@ -184,19 +184,20 @@ install_webhook_binary() {
 install_webhook_hooks() {
     mkdir -p "$WEBHOOK_CONFIG_DIR"
 
-    if [ -f "$WEBHOOK_HOOKS" ]; then
-        log_ok "Webhook hooks file already present at $WEBHOOK_HOOKS"
-        return 0
-    fi
+    # Ensure the clp user can read and write hooks configuration
+    chown clp:clp "$WEBHOOK_CONFIG_DIR"
+    chmod 750 "$WEBHOOK_CONFIG_DIR"
 
-    cat > "$WEBHOOK_HOOKS" << 'HOOKS'
+    if [ ! -f "$WEBHOOK_HOOKS" ]; then
+        cat > "$WEBHOOK_HOOKS" << 'HOOKS'
 []
 HOOKS
+    fi
 
     chown clp:clp "$WEBHOOK_HOOKS"
     chmod 640 "$WEBHOOK_HOOKS"
 
-    log_ok "Empty webhook hooks file created at $WEBHOOK_HOOKS"
+    log_ok "Webhook hooks file ready at $WEBHOOK_HOOKS"
 }
 
 install_webhook_service() {
@@ -211,7 +212,7 @@ After=network.target
 Type=simple
 User=clp
 Group=clp
-ExecStart=$WEBHOOK_BIN -hooks $WEBHOOK_HOOKS -port $WEBHOOK_PORT
+ExecStart=$WEBHOOK_BIN -hooks $WEBHOOK_HOOKS -port $WEBHOOK_PORT -hotreload
 Restart=on-failure
 
 [Install]

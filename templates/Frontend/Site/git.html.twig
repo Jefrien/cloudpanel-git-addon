@@ -94,6 +94,21 @@
                         </div>
                         <div class="row">
                             <div class="col-12">
+                                <label class="col-form-label" for="webhook-url">Webhook URL</label>
+                                <div class="input-group mb-2">
+                                    <input type="text" class="form-control" id="webhook-url" v-model="webhookUrl" readonly>
+                                    <button class="btn btn-outline-dark" type="button" @click="copyWebhookUrl">
+                                        <span v-if="copiedWebhook" class="me-1">✓</span>
+                                        <span v-text="copiedWebhook ? 'Copied' : 'Copy'"></span>
+                                    </button>
+                                </div>
+                                <div class="form-text">
+                                    Use this URL in your Git provider's webhook settings to trigger deployments.
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-12">
                                 <label class="col-form-label" for="git-url">Git URL</label>
                                 <input type="text" class="form-control" id="git-url" v-model="gitUrl">
                                 <div class="form-text">
@@ -183,6 +198,8 @@
             const branches = ref(['{{ config.branch|default("main") }}'])
             const deployPath = ref('{{ config.deploy_path|default(rootDirectory) }}')
             const deployScript = ref('{{ config.deploy_script|default("#!/bin/bash\n\n# Your deployment script here")|escape("js") }}')
+            const webhookUrl = ref('{{ webhookUrl }}')
+            const copiedWebhook = ref(false)
 
             // ============================================
             // SSH Key Generation State References
@@ -211,6 +228,22 @@
                 setTimeout(() => {
                     notification.value = { type: '', message: '' }
                 }, 5000)
+            }
+
+            /**
+             * Copy the webhook URL to the clipboard
+             * Shows a temporary success indicator on the copy button.
+             */
+            const copyWebhookUrl = async () => {
+                try {
+                    await navigator.clipboard.writeText(webhookUrl.value)
+                    copiedWebhook.value = true
+                    setTimeout(() => {
+                        copiedWebhook.value = false
+                    }, 2000)
+                } catch (err) {
+                    showNotification('danger', 'Could not copy webhook URL')
+                }
             }
 
             /**
@@ -372,6 +405,8 @@
                 deployScript,
                 testConnectionResult,
                 branches,
+                webhookUrl,
+                copiedWebhook,
 
                 // SSH Key Generation
                 ssh_email,
@@ -385,6 +420,7 @@
                 handleSave,
                 handleGenerateSshKey,
                 handleTestConnection,
+                copyWebhookUrl,
             }
         }
     }).mount('#app-git')

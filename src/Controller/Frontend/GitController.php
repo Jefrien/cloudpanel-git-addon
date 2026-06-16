@@ -20,6 +20,8 @@ class GitController extends Controller
     private string $homeDir;
     private string $siteDir;
     private string $siteUser;
+    private string $webhookHooksFile = '/opt/clp-git-addon/config/webhook-hooks.json';
+    private string $webhookPort = '9000';
 
     public function __construct(
         TranslatorInterface $translator,
@@ -74,6 +76,109 @@ class GitController extends Controller
     }
 
     /**
+     * Get the server's primary public IP address
+     *
+     * Uses hostname -I as the preferred method, falling back to SERVER_ADDR
+     * or localhost if nothing else is available.
+     *
+     * @return string The server IP address
+     */
+    private function getServerIp(): string
+    {
+        $ip = trim(shell_exec("hostname -I | awk '{print \$1}'") ?? '');
+        if (empty($ip)) {
+            $ip = $_SERVER['SERVER_ADDR'] ?? '127.0.0.1';
+        }
+        return $ip;
+    }
+
+    /**
+     * Generate the webhook URL for a given domain
+     *
+     * The webhook ID matches the domain name so the URL endpoint is
+     * http://<server-ip>:9000/hooks/<domainName>.
+     *
+     * @param string $domainName The site domain name
+     * @return string The generated webhook URL
+     */
+    private function generateWebhookUrl(string $domainName): string
+    {
+        return 'http://' . $this->getServerIp() . ':' . $this->webhookPort . '/hooks/' . $domainName;
+    }
+
+    /**
+     * Ensure a webhook URL exists for a site
+     *
+     * Generates and persists a webhook URL in the site config if one
+     * is not already present.
+     *
+     * @param string $domainName The site domain name
+     * @return string The webhook URL
+     */
+    private function ensureWebhookUrl(string $domainName): string
+    {
+        $config = $this->getConfig($domainName) ?? [];
+        if (!empty($config['webhook_url'])) {
+            return $config['webhook_url'];
+        }
+
+        $url = $this->generateWebhookUrl($domainName);
+        $this->saveConfig(['webhook_url' => $url], $domainName);
+        return $url;
+    }
+
+    /**
+     * Update the global webhook hooks file for a site
+     *
+     * Adds or updates a hook entry whose ID matches the domain name and
+     * points to the site's deploy script. Removes the entry when no deploy
+     * script path is provided.
+     *
+     * @param string $domainName The site domain name
+     * @param string|null $deployScriptPath Path to the deploy script, or null to remove
+     * @return void
+     */
+    private function updateWebhookHooks(string $domainName, ?string $deployScriptPath): void
+    {
+        $hooksFile = $this->webhookHooksFile;
+        $hooks = [];
+
+        if (file_exists($hooksFile) && is_readable($hooksFile)) {
+            $content = file_get_contents($hooksFile);
+            $hooks = json_decode($content, true) ?: [];
+        }
+
+        if ($deployScriptPath && file_exists($deployScriptPath)) {
+            $existingIndex = null;
+            foreach ($hooks as $index => $hook) {
+                if (($hook['id'] ?? '') === $domainName) {
+                    $existingIndex = $index;
+                    break;
+                }
+            }
+
+            $hookEntry = [
+                'id' => $domainName,
+                'execute-command' => $deployScriptPath,
+                'command-working-directory' => dirname($deployScriptPath),
+                'response-message' => 'Deploy triggered for ' . $domainName,
+            ];
+
+            if ($existingIndex !== null) {
+                $hooks[$existingIndex] = $hookEntry;
+            } else {
+                $hooks[] = $hookEntry;
+            }
+        } else {
+            $hooks = array_values(array_filter($hooks, function ($hook) use ($domainName) {
+                return ($hook['id'] ?? '') !== $domainName;
+            }));
+        }
+
+        file_put_contents($hooksFile, json_encode($hooks, JSON_PRETTY_PRINT), LOCK_EX);
+    }
+
+    /**
      * Get the home directory path for a specific domain
      *
      * Constructs the htdocs directory path for the site user.
@@ -98,13 +203,15 @@ class GitController extends Controller
         $siteEntity = $this->siteEntityManager->findOneByDomainName($domainName);
         $defaultKey = $this->getDefaultKey($domainName);
         $config = $this->getConfig($domainName);
+        $webhookUrl = $this->ensureWebhookUrl($domainName);
 
         return $this->render('Frontend/Site/git.html.twig', [
             'site' => $siteEntity,
             'defaultKey' => $defaultKey,
             'gitUrl' => '',
             'config' => $config,
-            'rootDirectory' => $this->siteDir
+            'rootDirectory' => $this->siteDir,
+            'webhookUrl' => $webhookUrl
         ]);
     }
 
@@ -667,8 +774,15 @@ EOF\'',
         // Merge with existing config to preserve other fields
         $config = array_merge($existingConfig, $config);
 
+        // Ensure webhook URL exists and persist it
+        $webhookUrl = $this->ensureWebhookUrl($domainName);
+        $config['webhook_url'] = $webhookUrl;
+
         // Save configuration
         $this->saveConfig($config, $domainName);
+
+        // Update global webhook hooks file so the webhook server knows about this site
+        $this->updateWebhookHooks($domainName, $deployScriptPath);
 
         return $this->json([
             'success' => true,
