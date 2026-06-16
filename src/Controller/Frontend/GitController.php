@@ -143,10 +143,21 @@ class GitController extends Controller
         $hooksFile = $this->webhookHooksFile;
         $hooks = [];
 
+        $this->logger->info(sprintf(
+            '[updateWebhookHooks] domain=%s deployScriptPath=%s file=%s exists=%s readable=%s',
+            $domainName,
+            $deployScriptPath ?? 'NULL',
+            $hooksFile,
+            file_exists($hooksFile) ? 'yes' : 'no',
+            is_readable($hooksFile) ? 'yes' : 'no'
+        ));
+
         if (file_exists($hooksFile) && is_readable($hooksFile)) {
             $content = file_get_contents($hooksFile);
             $hooks = json_decode($content, true) ?: [];
         }
+
+        $this->logger->info(sprintf('[updateWebhookHooks] loaded %d existing hook(s)', count($hooks)));
 
         if ($deployScriptPath && file_exists($deployScriptPath)) {
             $existingIndex = null;
@@ -176,6 +187,8 @@ class GitController extends Controller
         }
 
         $jsonContent = json_encode($hooks, JSON_PRETTY_PRINT);
+        $this->logger->info(sprintf('[updateWebhookHooks] writing %d hook(s) to %s', count($hooks), $hooksFile));
+
         $written = file_put_contents($hooksFile, $jsonContent, LOCK_EX);
 
         if ($written === false) {
@@ -187,6 +200,7 @@ class GitController extends Controller
             return false;
         }
 
+        $this->logger->info(sprintf('[updateWebhookHooks] wrote %d bytes', $written));
         return true;
     }
 
@@ -753,6 +767,12 @@ EOF\'',
         $deployPath = $data['deploy_path'] ?? null;
         $deployScript = $data['deploy_script'] ?? null;
 
+        $this->logger->info(sprintf(
+            '[saveGitConfig] domain=%s hasDeployScript=%s',
+            $domainName,
+            ($deployScript && !empty(trim($deployScript))) ? 'yes' : 'no'
+        ));
+
         // Get existing config to preserve key file name
         $existingConfig = $this->getConfig($domainName) ?? [];
         $keyFilename = $existingConfig['filename'] ?? null;
@@ -761,6 +781,7 @@ EOF\'',
         $deployScriptPath = null;
         if ($deployScript && !empty(trim($deployScript))) {
             $deployScriptPath = $this->saveDeployScript($deployScript, $domainName);
+            $this->logger->info(sprintf('[saveGitConfig] deployScriptPath=%s', $deployScriptPath ?? 'NULL'));
             if (!$deployScriptPath) {
                 return $this->json([
                     'success' => false,
@@ -831,6 +852,8 @@ EOF\'',
         $scriptFilename = 'deploy-' . $domainName . '.sh';
         $scriptPath = $deployScriptsDir . '/' . $scriptFilename;
 
+        $this->logger->info(sprintf('[saveDeployScript] domain=%s scriptPath=%s', $domainName, $scriptPath));
+
         // Create a temporary file with the script content
         $tempFile = tempnam(sys_get_temp_dir(), 'deploy-script-');
         file_put_contents($tempFile, $scriptContent);
@@ -845,10 +868,13 @@ EOF\'',
         );
         $output = shell_exec($copyCmd . ' 2>&1');
 
+        $this->logger->info(sprintf('[saveDeployScript] copy output: %s', trim($output)));
+
         // Remove temp file
         unlink($tempFile);
 
         if (!$this->fileExistsAsUser($scriptPath)) {
+            $this->logger->error(sprintf('[saveDeployScript] script file does not exist after copy: %s', $scriptPath));
             return null;
         }
 
@@ -860,6 +886,7 @@ EOF\'',
         );
         shell_exec($chmodCmd . ' 2>&1');
 
+        $this->logger->info(sprintf('[saveDeployScript] script saved successfully: %s', $scriptPath));
         return $scriptPath;
     }
 
