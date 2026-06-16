@@ -54,8 +54,6 @@
         <div class="site-content-container">
             {{ include('Frontend/Site/Partial/tab-container.html.twig', {'active': 'git', 'site': site}) }}
             {{ include('Partial/flash-messages.html.twig', { 'flashBagMessages': app.session.flashbag.all }) }}
-            <div v-if="notification.message" :class="'alert alert-' + notification.type" role="alert"
-                v-text="notification.message"></div>
             <div class="site-content">
 
                 <div class="card">
@@ -168,6 +166,12 @@
                                 <div class="form-text">
                                     Enter the deploy script in bash format.
                                 </div>
+                            </div>
+                        </div>
+                        <div class="row" v-if="notification.message">
+                            <div class="col-12">
+                                <div :class="'alert alert-' + notification.type" role="alert"
+                                    v-text="notification.message"></div>
                             </div>
                         </div>
                         <div class="row">
