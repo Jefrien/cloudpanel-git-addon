@@ -77,10 +77,10 @@
                                     </div>
                                     <div class="col text-end">
                                         <button class="btn btn-sm btn-outline-dark" id="btn-generate-key"
-                                            @click="myModal.show()">
-                                            <span v-if="loading" class="spinner-border spinner-border-sm me-2"
+                                            @click="myModal.show()" :disabled="loadingGenerateKey">
+                                            <span v-if="loadingGenerateKey" class="spinner-border spinner-border-sm me-2"
                                                 role="status" aria-hidden="true"></span>
-                                            <span v-if="loading">Loading...</span>
+                                            <span v-if="loadingGenerateKey">Loading...</span>
                                             <span v-else>Generate a new key</span>
                                         </button>
                                     </div>
@@ -125,8 +125,11 @@
                         </div>
                         <div class="row">
                             <div class="col">
-                                <button class="btn btn-outline-dark" @click.prevent="handleTestConnection">
-                                    Test Connection
+                                <button class="btn btn-outline-dark" @click.prevent="handleTestConnection" :disabled="loadingTestConnection">
+                                    <span v-if="loadingTestConnection" class="spinner-border spinner-border-sm me-2"
+                                        role="status" aria-hidden="true"></span>
+                                    <span v-if="loadingTestConnection">Testing...</span>
+                                    <span v-else>Test Connection</span>
                                 </button>
                             </div>
                             <div class="col text-end">
@@ -169,8 +172,11 @@
                         </div>
                         <div class="row">
                             <div class="col-12 text-end">
-                                <button class="btn btn-blue btn-lg" id="btn-save-git" @click="handleSave">
-                                    {% trans %}Save{% endtrans %}
+                                <button class="btn btn-blue btn-lg" id="btn-save-git" @click="handleSave" :disabled="loadingSave">
+                                    <span v-if="loadingSave" class="spinner-border spinner-border-sm me-2"
+                                        role="status" aria-hidden="true"></span>
+                                    <span v-if="loadingSave">Saving...</span>
+                                    <span v-else>{% trans %}Save{% endtrans %}</span>
                                 </button>
                             </div>
                         </div>
@@ -217,7 +223,9 @@
             // ============================================
             // Loading and Test State
             // ============================================
-            const loading = ref(false)
+            const loadingGenerateKey = ref(false)
+            const loadingTestConnection = ref(false)
+            const loadingSave = ref(false)
             const testConnectionResult = ref(null)
 
             // ============================================
@@ -278,7 +286,7 @@
              * Sends repo URL, branch, deploy path, and deploy script
              */
             const handleSave = async () => {
-                loading.value = true
+                loadingSave.value = true
 
                 const response = await fetch("{{ path('clp_site_git_save_config', {'domainName': site.domainName}) }}", {
                     method: 'POST',
@@ -300,7 +308,7 @@
                 } else {
                     showNotification('danger', 'Failed to save git configuration: ' + data.message)
                 }
-                loading.value = false
+                loadingSave.value = false
             }
 
             /**
@@ -308,7 +316,7 @@
              * Validates form, sends request to backend, and updates UI with new key
              */
             const handleGenerateSshKey = async () => {
-                loading.value = true
+                loadingGenerateKey.value = true
 
                 errors.value = {}
                 // validate email
@@ -322,7 +330,7 @@
                 }
 
                 if (Object.keys(errors.value).length > 0) {
-                    loading.value = false
+                    loadingGenerateKey.value = false
                     return
                 }
 
@@ -344,12 +352,12 @@
                 console.log(data)
                 if (!data.success) {
                     showNotification('danger', data.message)
-                    loading.value = false
+                    loadingGenerateKey.value = false
                     return
                 }
                 showNotification('success', 'SSH key generated successfully')
                 defaultKey.value = data.public_key
-                loading.value = false
+                loadingGenerateKey.value = false
             }
 
             /**
@@ -357,7 +365,7 @@
              * Validates connection and fetches available branches if successful
              */
             const handleTestConnection = async () => {
-                loading.value = true
+                loadingTestConnection.value = true
 
                 const response = await fetch("{{ path('clp_site_git_test_connection', {'domainName': site.domainName}) }}", {
                     method: 'POST',
@@ -378,7 +386,7 @@
                     branches.value = data.branches.branches.map(branch => branch.name)
                     gitBranch.value = data.branches.default_branch
                 }
-                loading.value = false
+                loadingTestConnection.value = false
             }
 
             // ============================================
@@ -420,8 +428,10 @@
                 ssh_name,
                 errors,
 
-                // Loading State
-                loading,
+                // Loading States
+                loadingGenerateKey,
+                loadingTestConnection,
+                loadingSave,
 
                 // Methods
                 handleSave,
