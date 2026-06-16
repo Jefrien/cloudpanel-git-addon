@@ -22,6 +22,8 @@ class GitController extends Controller
     private string $siteUser;
     private string $webhookHooksFile = '/opt/clp-git-addon/config/webhook-hooks.json';
     private string $webhookPort = '9000';
+    private string $deployWrapper = '/opt/clp-git-addon/scripts/clp-git-deploy-wrapper.sh';
+    private string $logsDir = '/opt/clp-git-addon/logs';
 
     public function __construct(
         TranslatorInterface $translator,
@@ -140,10 +142,14 @@ class GitController extends Controller
      */
     private function updateWebhookHooks(string $domainName, ?string $deployScriptPath): array
     {
+        $siteEntity = $this->siteEntityManager->findOneByDomainName($domainName);
+        $siteUser = $siteEntity->getUser();
+
         $hooksFile = $this->webhookHooksFile;
         $hooks = [];
         $debug = [
             'domain' => $domainName,
+            'site_user' => $siteUser,
             'deploy_script_path' => $deployScriptPath,
             'hooks_file' => $hooksFile,
             'hooks_file_exists' => file_exists($hooksFile),
@@ -169,8 +175,13 @@ class GitController extends Controller
 
             $hookEntry = [
                 'id' => $domainName,
-                'execute-command' => $deployScriptPath,
+                'execute-command' => $this->deployWrapper,
                 'command-working-directory' => dirname($deployScriptPath),
+                'pass-arguments-to-command' => [
+                    ['source' => 'string', 'name' => $domainName],
+                    ['source' => 'string', 'name' => $deployScriptPath],
+                    ['source' => 'string', 'name' => $siteUser],
+                ],
                 'response-message' => 'Deploy triggered for ' . $domainName,
             ];
 
@@ -254,13 +265,17 @@ class GitController extends Controller
         $config = $this->getConfig($domainName);
         $webhookUrl = $this->ensureWebhookUrl($domainName);
 
+        $deployPath = $config['deploy_path'] ?? $this->siteDir;
+        $hasRepo = !empty($deployPath) && $this->hasGitRepo($deployPath, $domainName);
+
         return $this->render('Frontend/Site/git.html.twig', [
             'site' => $siteEntity,
             'defaultKey' => $defaultKey,
             'gitUrl' => '',
             'config' => $config,
             'rootDirectory' => $this->siteDir,
-            'webhookUrl' => $webhookUrl
+            'webhookUrl' => $webhookUrl,
+            'hasRepo' => $hasRepo
         ]);
     }
 
@@ -513,6 +528,167 @@ EOF\'',
     {
         $this->runAsUser("chmod 644 " . escapeshellarg($publicPath));
         $this->runAsUser("chmod 600 " . escapeshellarg($privatePath));
+    }
+
+    /**
+     * Extract the Git host from a repository URL
+     *
+     * Supports git@host:path, ssh://git@host/path, and https://host/path URLs.
+     *
+     * @param string $repoUrl The repository URL
+     * @return string|null The host name, or null if it cannot be parsed
+     */
+    private function parseGitHost(string $repoUrl): ?string
+    {
+        $repoUrl = trim($repoUrl);
+
+        if (preg_match('/^git@([^:]+):/', $repoUrl, $matches)) {
+            return $matches[1];
+        }
+
+        $host = parse_url($repoUrl, PHP_URL_HOST);
+        if (!empty($host)) {
+            return $host;
+        }
+
+        return null;
+    }
+
+    /**
+     * Update the site user's SSH config to use the generated key for the Git host
+     *
+     * This makes plain `git pull` / `git clone` commands work inside the deploy
+     * script without having to pass the private key explicitly.
+     *
+     * @param string $domainName The site domain name
+     * @param string $repoUrl The repository URL
+     * @param string $keyFilename The SSH key filename (without path)
+     * @return bool True on success, false on failure
+     */
+    private function updateSshConfig(string $domainName, string $repoUrl, string $keyFilename): bool
+    {
+        $this->initConfig($domainName);
+        $host = $this->parseGitHost($repoUrl);
+
+        if (!$host) {
+            $this->logger->warning(sprintf('[updateSshConfig] Could not parse host from repo URL: %s', $repoUrl));
+            return false;
+        }
+
+        $keyFile = $this->sshDir . '/' . preg_replace('/[^a-zA-Z0-9_-]/', '', $keyFilename);
+        $configFile = $this->sshDir . '/config';
+
+        $entry = sprintf(
+            "Host %s\n    HostName %s\n    User git\n    IdentityFile %s\n    IdentitiesOnly yes\n    StrictHostKeyChecking accept-new\n",
+            $host,
+            $host,
+            $keyFile
+        );
+
+        // Read existing config as the site user
+        $existingConfig = '';
+        if ($this->fileExistsAsUser($configFile)) {
+            $existingConfig = $this->readFileAsUser($configFile);
+        }
+
+        // Replace existing Host entry for the same host, or append a new one
+        $pattern = '/Host\s+' . preg_quote($host, '/') . '\b.*?\n(?=Host\s|\z)/s';
+        if (preg_match($pattern, $existingConfig)) {
+            $newConfig = preg_replace($pattern, $entry, $existingConfig);
+        } else {
+            $newConfig = rtrim($existingConfig) . "\n\n" . $entry;
+        }
+
+        // Write the config file as the site user via a here-document
+        $writeCmd = sprintf(
+            'sudo -u %s bash -c \'cat > %s << EOF\n%s\nEOF\'',
+            escapeshellarg($this->siteUser),
+            escapeshellarg($configFile),
+            $newConfig
+        );
+        shell_exec($writeCmd . ' 2>&1');
+
+        // Ensure correct permissions
+        $this->runAsUser("chmod 600 " . escapeshellarg($configFile));
+
+        return $this->fileExistsAsUser($configFile);
+    }
+
+    /**
+     * Check whether the deploy path already contains a Git repository
+     *
+     * @param string $deployPath The path to check
+     * @param string $domainName The site domain name
+     * @return bool True if a .git directory exists
+     */
+    private function hasGitRepo(string $deployPath, string $domainName): bool
+    {
+        $this->initConfig($domainName);
+        $gitDir = rtrim($deployPath, '/') . '/.git';
+        $output = $this->runAsUser("test -d " . escapeshellarg($gitDir) . " && echo YES || echo NO");
+        return trim($output) === 'YES';
+    }
+
+    /**
+     * Clone a repository into the deploy path as the site user
+     *
+     * @param string $repoUrl The repository URL
+     * @param string $deployPath The destination directory
+     * @param string $domainName The site domain name
+     * @return array ['success' => bool, 'output' => string]
+     */
+    private function cloneRepo(string $repoUrl, string $deployPath, string $domainName): array
+    {
+        $this->initConfig($domainName);
+
+        // Ensure parent directory exists
+        $parentDir = dirname($deployPath);
+        $this->runAsUser("mkdir -p " . escapeshellarg($parentDir));
+
+        $cmd = sprintf(
+            'sudo -u %s bash -c \'cd %s && git clone %s %s 2>&1\'',
+            escapeshellarg($this->siteUser),
+            escapeshellarg($parentDir),
+            escapeshellarg($repoUrl),
+            escapeshellarg(basename($deployPath))
+        );
+
+        $exitCode = 0;
+        exec($cmd, $outputArray, $exitCode);
+        $output = implode("\n", $outputArray);
+
+        return [
+            'success' => $exitCode === 0 && $this->hasGitRepo($deployPath, $domainName),
+            'output' => $output,
+            'exit_code' => $exitCode,
+        ];
+    }
+
+    /**
+     * Run the deploy script as the site user
+     *
+     * @param string $deployScriptPath Path to the deploy script
+     * @param string $domainName The site domain name
+     * @return array ['success' => bool, 'output' => string, 'exit_code' => int]
+     */
+    private function runDeployScript(string $deployScriptPath, string $domainName): array
+    {
+        $this->initConfig($domainName);
+
+        $cmd = sprintf(
+            'sudo -u %s bash -c \'cd %s && %s 2>&1\'',
+            escapeshellarg($this->siteUser),
+            escapeshellarg(dirname($deployScriptPath)),
+            escapeshellarg($deployScriptPath)
+        );
+
+        exec($cmd . ' 2>&1', $outputArray, $exitCode);
+
+        return [
+            'success' => $exitCode === 0,
+            'output' => implode("\n", $outputArray),
+            'exit_code' => $exitCode,
+        ];
     }
 
     /**
@@ -847,9 +1023,49 @@ EOF\'',
             ], 500);
         }
 
+        // Ensure the SSH key is configured for the Git host so the deploy script can run plain git commands
+        if (!empty($keyFilename) && !empty($repoUrl)) {
+            $this->updateSshConfig($domainName, $repoUrl, $keyFilename);
+        }
+
+        // First deploy: clone the repo if the deploy path does not contain a Git repository yet
+        $cloned = false;
+        $cloneResult = null;
+        if (!empty($repoUrl) && !empty($deployPath) && !$this->hasGitRepo($deployPath, $domainName)) {
+            $cloneResult = $this->cloneRepo($repoUrl, $deployPath, $domainName);
+            $cloned = $cloneResult['success'];
+
+            if (!$cloned) {
+                return $this->json([
+                    'success' => false,
+                    'message' => 'Configuration saved, but failed to clone repository: ' . ($cloneResult['output'] ?: 'unknown error'),
+                    'clone_output' => $cloneResult['output'],
+                    'clone_exit_code' => $cloneResult['exit_code'],
+                    'config' => $config
+                ], 500);
+            }
+        }
+
+        // Run the deploy script immediately after save / clone
+        $deployResult = null;
+        if (!empty($deployScriptPath)) {
+            $deployResult = $this->runDeployScript($deployScriptPath, $domainName);
+        }
+
+        $message = 'Git configuration saved successfully';
+        if ($cloned) {
+            $message = 'Repository cloned and deploy script executed';
+        } elseif ($deployResult && $deployResult['success']) {
+            $message = 'Git configuration saved and deploy script executed';
+        }
+
         return $this->json([
             'success' => true,
-            'message' => 'Git configuration saved successfully',
+            'message' => $message,
+            'cloned' => $cloned,
+            'clone_output' => $cloneResult ? $cloneResult['output'] : null,
+            'deploy_output' => $deployResult ? $deployResult['output'] : null,
+            'deploy_exit_code' => $deployResult ? $deployResult['exit_code'] : null,
             'config' => $config
         ]);
     }
@@ -911,6 +1127,55 @@ EOF\'',
 
         $this->logger->info(sprintf('[saveDeployScript] script saved successfully: %s', $scriptPath));
         return $scriptPath;
+    }
+
+    /**
+     * Retrieve deploy logs for a site
+     *
+     * Reads the captured stdout/stderr of the last deploy script executions
+     * for the specified domain. Logs are written by the deploy wrapper script
+     * invoked by the webhook server.
+     *
+     * @param Request $request The HTTP request
+     * @param string $domainName The site domain name
+     * @return JsonResponse JSON response containing the log content
+     */
+    public function getDeployLogs(Request $request, string $domainName): JsonResponse
+    {
+        $this->initConfig($domainName);
+        $config = $this->getConfig($domainName) ?? [];
+
+        if (empty($config['deploy_script_path'])) {
+            return $this->json([
+                'success' => true,
+                'log' => '',
+                'message' => 'No deploy script configured for this site'
+            ]);
+        }
+
+        $logFile = $this->logsDir . '/deploy-' . $domainName . '.log';
+
+        if (!file_exists($logFile) || !is_readable($logFile)) {
+            return $this->json([
+                'success' => true,
+                'log' => '',
+                'message' => 'No logs available yet'
+            ]);
+        }
+
+        $log = file_get_contents($logFile);
+
+        if ($log === false) {
+            return $this->json([
+                'success' => false,
+                'message' => 'Could not read deploy log'
+            ], 500);
+        }
+
+        return $this->json([
+            'success' => true,
+            'log' => $log
+        ]);
     }
 
 }

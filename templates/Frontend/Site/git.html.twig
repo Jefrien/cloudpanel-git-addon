@@ -17,6 +17,7 @@
 <div class="container-fluid container-limited-width" id="app-git">
 
     {{ include('Frontend/Site/Partial/Git/_modal.html.twig') }}
+    {{ include('Frontend/Site/Partial/Git/_logs_modal.html.twig') }}
 
     <div class="site-container">
         {{ include('Frontend/Site/Partial/site-info.html.twig', {'site': site}) }}
@@ -29,7 +30,9 @@
                     <div class="card-header d-flex justify-content-between">
                         {% trans %}Git Manager{% endtrans %}
                         <div>
-                            <button v-if="gitBranch" class="btn btn-md btn-outline-secondary me-2">Logs</button>
+                            <button v-if="deployScriptPath" class="btn btn-md btn-outline-secondary me-2" @click="handleShowLogs">
+                                Logs
+                            </button>
                             <button v-if="gitBranch" class="btn btn-md btn-blue" @click="handleDeploy">Deploy
                                 Now</button>
                         </div>

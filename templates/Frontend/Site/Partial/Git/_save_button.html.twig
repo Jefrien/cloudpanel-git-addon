@@ -9,8 +9,8 @@
                                 <button class="btn btn-blue btn-lg" id="btn-save-git" @click="handleSave" :disabled="loadingSave">
                                     <span v-if="loadingSave" class="spinner-border spinner-border-sm me-2"
                                         role="status" aria-hidden="true"></span>
-                                    <span v-if="loadingSave">Saving...</span>
-                                    <span v-else>{% trans %}Save{% endtrans %}</span>
+                                    <span v-if="loadingSave" v-text="hasRepo ? 'Saving...' : 'Cloning and deploying...'"></span>
+                                    <span v-else v-text="hasRepo ? 'Save' : 'Save and First Deploy'"></span>
                                 </button>
                             </div>
                         </div>

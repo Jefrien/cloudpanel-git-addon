@@ -1,0 +1,34 @@
+    <div class="modal fade" id="deploy-logs-modal" tabindex="-1" aria-labelledby="deployLogsModalLabel"
+        aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h1 class="modal-title fs-5" id="deployLogsModalLabel">Deploy Logs</h1>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div v-if="loadingLogs" class="text-center">
+                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                        Loading logs...
+                    </div>
+                    <div v-else-if="deployLogs" class="position-relative">
+                        <pre class="bg-dark text-light p-3 rounded" style="max-height: 500px; overflow: auto;"><code v-text="deployLogs"></code></pre>
+                        <button class="btn btn-sm btn-outline-secondary position-absolute top-0 end-0 m-2" @click="copyLogs">
+                            Copy
+                        </button>
+                    </div>
+                    <div v-else class="text-muted">
+                        No logs available yet.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" @click="loadDeployLogs" :disabled="loadingLogs">
+                        <span v-if="loadingLogs" class="spinner-border spinner-border-sm me-2"
+                            role="status" aria-hidden="true"></span>
+                        Refresh
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>

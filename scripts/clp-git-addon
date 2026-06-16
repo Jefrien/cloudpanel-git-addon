@@ -18,6 +18,7 @@ WEBHOOK_CONFIG_DIR="$ADDON_DIR/config"
 WEBHOOK_HOOKS="$WEBHOOK_CONFIG_DIR/webhook-hooks.json"
 WEBHOOK_SERVICE="/etc/systemd/system/clp-git-webhook.service"
 WEBHOOK_PORT="9000"
+LOGS_DIR="$ADDON_DIR/logs"
 
 VERSION_FILE="$ADDON_DIR/VERSION"
 VERSION=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
@@ -100,6 +101,10 @@ clp_site_git_test_connection:
 clp_site_git_save_config:
   path: /site/{domainName}/git/save-config
   controller: App\Controller\Frontend\GitController::saveGitConfig
+
+clp_site_git_deploy_logs:
+  path: /site/{domainName}/git/deploy-logs
+  controller: App\Controller\Frontend\GitController::getDeployLogs
 ROUTES
 
     if grep -q "clp_site_git:" "$CLP_ROUTES"; then
@@ -122,11 +127,13 @@ copy_files() {
     chown clp:clp "$CLP_CONTROLLERS/GitController.php"
     chown clp:clp "$CLP_TEMPLATES/git.html.twig"
     chown -R clp:clp "$CLP_TEMPLATES/Partial/Git"
+    chown clp:clp "$ADDON_DIR/scripts/clp-git-deploy-wrapper.sh"
 
     # Match CloudPanel file permissions (750)
     chmod 770 "$CLP_CONTROLLERS/GitController.php"
     chmod 770 "$CLP_TEMPLATES/git.html.twig"
     chmod -R 770 "$CLP_TEMPLATES/Partial/Git"
+    chmod 770 "$ADDON_DIR/scripts/clp-git-deploy-wrapper.sh"
 
     log_ok "Addon files copied"
 }
@@ -238,6 +245,11 @@ HOOKS
 
     chown clp:clp "$WEBHOOK_HOOKS"
     chmod 640 "$WEBHOOK_HOOKS"
+
+    # Ensure deploy logs directory exists and is writable by the webhook service (clp)
+    mkdir -p "$LOGS_DIR"
+    chown -R clp:clp "$LOGS_DIR"
+    chmod 755 "$LOGS_DIR"
 
     log_ok "Webhook hooks file ready at $WEBHOOK_HOOKS"
 }
@@ -406,13 +418,13 @@ cmd_update() {
     chmod +x "$ADDON_DIR/bump-version.sh"
 
     # Ensure shell scripts use Unix line endings (GitHub tarballs sometimes contain CRLF)
-    tr -d '\r' < "$ADDON_DIR/scripts/clp-git-addon" > "$ADDON_DIR/scripts/clp-git-addon.tmp"
-    mv "$ADDON_DIR/scripts/clp-git-addon.tmp" "$ADDON_DIR/scripts/clp-git-addon"
-    chmod +x "$ADDON_DIR/scripts/clp-git-addon"
-
-    tr -d '\r' < "$ADDON_DIR/bump-version.sh" > "$ADDON_DIR/bump-version.sh.tmp"
-    mv "$ADDON_DIR/bump-version.sh.tmp" "$ADDON_DIR/bump-version.sh"
-    chmod +x "$ADDON_DIR/bump-version.sh"
+    for script in "$ADDON_DIR/scripts/clp-git-addon" "$ADDON_DIR/bump-version.sh" "$ADDON_DIR/scripts/clp-git-deploy-wrapper.sh"; do
+        if [ -f "$script" ]; then
+            tr -d '\r' < "$script" > "$script.tmp"
+            mv "$script.tmp" "$script"
+            chmod +x "$script"
+        fi
+    done
 
     # Cleanup
     rm -rf "$tmp_dir"
@@ -530,6 +542,12 @@ cmd_check() {
     else
         log_err "Webhook service file MISSING"
         all_ok=false
+    fi
+
+    if [ -d "$LOGS_DIR" ]; then
+        log_ok "Deploy logs directory present"
+    else
+        log_warn "Deploy logs directory not present"
     fi
 
     echo ""
