@@ -185,7 +185,7 @@ class GitController extends Controller
             }));
         }
 
-        $jsonContent = json_encode($hooks, JSON_PRETTY_PRINT);
+        $jsonContent = json_encode($hooks, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         $debug['new_hooks_count'] = count($hooks);
         $debug['json_content'] = $jsonContent;
 
@@ -288,7 +288,7 @@ class GitController extends Controller
         unset($mergedConfig['deploy_script']);
 
         // Encode config to JSON
-        $jsonContent = json_encode($mergedConfig, JSON_PRETTY_PRINT);
+        $jsonContent = json_encode($mergedConfig, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 
         // Write directly using bash as the site user
         $writeCmd = sprintf(
