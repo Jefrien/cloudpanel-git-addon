@@ -48,7 +48,7 @@ git clone https://github.com/Jefrien/cloudpanel-git-addon.git /opt/clp-git-addon
 Or install a specific release (recommended for production):
 
 ```bash
-wget -qO- https://github.com/Jefrien/cloudpanel-git-addon/archive/refs/tags/v1.0.3.tar.gz | tar xz -C /opt/ && mv /opt/cloudpanel-git-addon-1.0.3 /opt/clp-git-addon
+wget -qO- https://github.com/Jefrien/cloudpanel-git-addon/archive/refs/tags/v1.0.4.tar.gz | tar xz -C /opt/ && mv /opt/cloudpanel-git-addon-1.0.4 /opt/clp-git-addon
 ```
 
 ### 2. Run the installer
@@ -84,6 +84,43 @@ All items should show `[OK]`.
 6. Click **"Test Connection"** to verify SSH access and list remote branches
 7. Select the **branch**, enter the **deploy path**, and optionally provide a **deploy script**
 8. Click **"Save Configuration"**
+
+---
+
+## Webhook Configuration
+
+The addon runs a small webhook server on port `9000`. Git providers need a publicly reachable URL to send push events to. You have two options to expose the webhook endpoint:
+
+### Option 1: Open port 9000 in CloudPanel firewall
+
+Open port `9000` in your CloudPanel firewall settings so the webhook server is reachable directly at:
+
+```
+http://<your-server-ip>:9000/hooks/<domainName>
+```
+
+Make sure your hosting provider's network-level firewall (if any) also allows traffic on port `9000`.
+
+### Option 2: Use a reverse proxy with a domain
+
+For a cleaner URL and to avoid opening an extra port, configure a reverse proxy on an existing domain (for example, `git-hooks.yourserver.com`) that proxies requests to `http://127.0.0.1:9000`. Example Nginx location block:
+
+```nginx
+location /hooks/ {
+    proxy_pass http://127.0.0.1:9000/hooks/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+With this setup, your Git provider webhook URL becomes:
+
+```
+https://git-hooks.yourserver.com/hooks/<domainName>
+```
+
+> **Note:** The addon generates the webhook URL using the server's primary IP address and port `9000` by default. If you use a reverse proxy, replace the generated URL with your proxy domain when configuring the webhook in your Git provider.
 
 ---
 

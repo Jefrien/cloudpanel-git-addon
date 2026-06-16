@@ -94,7 +94,10 @@
                         </div>
                         <div class="row">
                             <div class="col-12">
-                                <label class="col-form-label" for="webhook-url">Webhook URL</label>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <label class="col-form-label" for="webhook-url">Webhook URL</label>
+                                    <a href="https://github.com/Jefrien/cloudpanel-git-addon/blob/main/README.md#webhook-configuration" target="_blank" rel="noopener" class="small">Help</a>
+                                </div>
                                 <div class="input-group mb-2">
                                     <input type="text" class="form-control" id="webhook-url" v-model="webhookUrl" readonly>
                                     <button class="btn btn-outline-dark" type="button" @click="copyWebhookUrl">
@@ -104,6 +107,10 @@
                                 </div>
                                 <div class="form-text">
                                     Use this URL in your Git provider's webhook settings to trigger deployments.
+                                    The webhook server runs internally on port 9000. To make it reachable you must either
+                                    <strong>open port 9000 in the CloudPanel firewall</strong> or
+                                    <strong>set up a reverse proxy to port 9000 on a domain</strong>.
+                                    <a href="https://github.com/Jefrien/cloudpanel-git-addon/blob/main/README.md#webhook-configuration" target="_blank" rel="noopener">Learn more</a>.
                                 </div>
                             </div>
                         </div>
