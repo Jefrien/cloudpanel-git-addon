@@ -1,0 +1,4 @@
+# Force LF line endings for shell scripts so GitHub tarballs stay Unix-compatible
+*.sh text eol=lf
+scripts/clp-git-addon text eol=lf
+bump-version.sh text eol=lf

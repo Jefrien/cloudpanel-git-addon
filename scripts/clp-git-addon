@@ -405,6 +405,10 @@ cmd_update() {
     chmod +x "$ADDON_DIR/scripts/clp-git-addon"
     chmod +x "$ADDON_DIR/bump-version.sh"
 
+    # Ensure shell scripts use Unix line endings (tarballs can contain CRLF)
+    sed -i 's/\r$//' "$ADDON_DIR/scripts/clp-git-addon"
+    sed -i 's/\r$//' "$ADDON_DIR/bump-version.sh"
+
     # Cleanup
     rm -rf "$tmp_dir"
 
