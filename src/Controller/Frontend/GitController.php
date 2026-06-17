@@ -199,33 +199,67 @@ class GitController extends Controller
         $jsonContent = json_encode($hooks, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         $debug['new_hooks_count'] = count($hooks);
         $debug['json_content'] = $jsonContent;
+        $debug['php_user'] = function_exists('posix_getpwuid') ? (posix_getpwuid(posix_geteuid())['name'] ?? 'unknown') : 'unknown';
 
-        // Primary: write via shell as clp to avoid PHP-FPM user permission quirks
-        $shellCmd = sprintf(
-            'echo %s | sudo -u clp tee %s > /dev/null && sync',
-            escapeshellarg($jsonContent),
-            escapeshellarg($hooksFile)
-        );
-        $shellOutput = shell_exec($shellCmd . ' 2>&1');
-        $debug['shell_output'] = trim($shellOutput ?? '');
+        // Make sure the config directory exists and is writable.
+        // This is normally done by the install script, but we try to recover if permissions were changed.
+        $configDir = dirname($hooksFile);
+        if (!is_dir($configDir)) {
+            @mkdir($configDir, 0755, true);
+        }
+        if (!file_exists($hooksFile)) {
+            @file_put_contents($hooksFile, "[]\n");
+        }
 
-        // Verify by reading back
-        $verify = @file_get_contents($hooksFile);
-        $debug['verify_after_shell'] = $verify;
-        $written = ($verify === $jsonContent) ? strlen($jsonContent) : false;
+        $written = false;
 
-        // Fallback: try direct write if shell didn't work
-        if ($written === false || $written === 0) {
-            $debug['shell_failed'] = true;
+        // Strategy 1: direct write (works when PHP runs as clp and the file is writable)
+        if (is_writable($hooksFile) || (!file_exists($hooksFile) && is_writable($configDir))) {
             $written = @file_put_contents($hooksFile, $jsonContent, LOCK_EX);
-            $debug['file_put_contents_result'] = $written;
-        } else {
-            $debug['shell_failed'] = false;
+            $debug['strategy'] = 'direct';
+            $debug['direct_result'] = $written;
+        }
+
+        // Strategy 2: write via shell as clp using tee
+        if ($written === false || $written === 0) {
+            $shellCmd = sprintf(
+                'echo %s | sudo -n -u clp tee %s > /dev/null && sync',
+                escapeshellarg($jsonContent),
+                escapeshellarg($hooksFile)
+            );
+            $shellOutput = shell_exec($shellCmd . ' 2>&1');
+            $debug['strategy'] = 'shell_tee';
+            $debug['shell_output'] = trim($shellOutput ?? '');
+
+            $verify = @file_get_contents($hooksFile);
+            if ($verify === $jsonContent) {
+                $written = strlen($jsonContent);
+            }
+            $debug['shell_verify_match'] = ($verify === $jsonContent);
+        }
+
+        // Strategy 3: write via a clp bash redirection
+        if ($written === false || $written === 0) {
+            $shellCmd = sprintf(
+                'sudo -n -u clp bash -c \'echo -n %s > %s\' 2>&1',
+                escapeshellarg($jsonContent),
+                escapeshellarg($hooksFile)
+            );
+            $shellOutput = shell_exec($shellCmd);
+            $debug['strategy'] = 'shell_redirect';
+            $debug['shell_redirect_output'] = trim($shellOutput ?? '');
+
+            $verify = @file_get_contents($hooksFile);
+            if ($verify === $jsonContent) {
+                $written = strlen($jsonContent);
+            }
+            $debug['shell_redirect_verify_match'] = ($verify === $jsonContent);
         }
 
         $debug['final_written'] = $written;
 
         if ($written === false || $written === 0) {
+            $this->logger->error('[updateWebhookHooks] Failed to write hooks file', $debug);
             return [
                 'success' => false,
                 'debug' => $debug,
@@ -1050,9 +1084,25 @@ EOF\'',
         $hooksResult = $this->updateWebhookHooks($domainName, $deployScriptPath);
 
         if (!$hooksResult['success']) {
+            $debugInfo = $hooksResult['debug'] ?? [];
+            $errorDetail = '';
+            if (!empty($debugInfo['strategy'])) {
+                $errorDetail .= ' Tried strategy: ' . $debugInfo['strategy'] . '.';
+            }
+            if (!empty($debugInfo['shell_output'])) {
+                $errorDetail .= ' Shell output: ' . substr($debugInfo['shell_output'], 0, 200);
+            }
+            if (!empty($debugInfo['shell_redirect_output'])) {
+                $errorDetail .= ' Redirect output: ' . substr($debugInfo['shell_redirect_output'], 0, 200);
+            }
+            if (!empty($debugInfo['direct_result'])) {
+                $errorDetail .= ' Direct write result: ' . var_export($debugInfo['direct_result'], true);
+            }
+
             return $this->json([
                 'success' => false,
-                'message' => 'Configuration saved, but failed to update webhook hooks file. Run "clp-git-addon repair" to fix permissions.'
+                'message' => 'Configuration saved, but failed to update webhook hooks file. Run "clp-git-addon repair" as root to fix permissions.' . $errorDetail,
+                'debug' => $debugInfo
             ], 500);
         }
 
