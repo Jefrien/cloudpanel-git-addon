@@ -69,14 +69,12 @@ patch_tab_container() {
 }
 
 unpatch_routes() {
-    # Remove any existing CloudPanel Git Addon route block(s) to prevent duplicates.
-    # The block starts with our marker comment and ends with the saveGitConfig controller.
-    awk '
-        BEGIN { skip = 0 }
-        /# CloudPanel Git Addon/ { skip = 1; next }
-        skip && /controller: App\\Controller\\Frontend\\GitController::saveGitConfig/ { skip = 0; next }
-        !skip { print }
-    ' "$CLP_ROUTES" > "$CLP_ROUTES.tmp" && mv "$CLP_ROUTES.tmp" "$CLP_ROUTES"
+    # Remove any existing CloudPanel Git Addon route entries to prevent duplicates.
+    # This removes both the marker comment and every route whose name starts with
+    # clp_site_git, regardless of how the file was previously patched.
+    grep -v '^# CloudPanel Git Addon' "$CLP_ROUTES" | \
+    grep -vE '^clp_site_git(_[a-z0-9_]+)?:' > "$CLP_ROUTES.tmp" && \
+    mv "$CLP_ROUTES.tmp" "$CLP_ROUTES"
 }
 
 patch_routes() {
