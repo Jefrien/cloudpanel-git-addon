@@ -137,8 +137,11 @@ copy_files() {
 }
 
 clear_cache() {
-    su -s /bin/bash -c "cd $CLP_APP && php bin/console cache:clear --env=prod 2>&1" clp > /dev/null
-    log_ok "Symfony cache cleared"
+    if su -s /bin/bash -c "cd $CLP_APP && php bin/console cache:clear --env=prod 2>&1" clp > /dev/null; then
+        log_ok "Symfony cache cleared"
+    else
+        log_warn "Symfony cache clear failed (continuing anyway)"
+    fi
 }
 
 install_apt_hook() {
