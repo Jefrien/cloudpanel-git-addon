@@ -28,7 +28,6 @@
             const deployLogs = ref('')
             const loadingLogs = ref(false)
             const hasRepo = ref({{ hasRepo ? 'true' : 'false' }})
-            const forceOverwrite = ref(false)
 
             // ============================================
             // SSH Key Generation State References
@@ -180,7 +179,7 @@
                         branch: gitBranch.value,
                         deploy_path: deployPath.value,
                         deploy_script: deployScript.value,
-                        force_overwrite: forceOverwrite.value
+                        force_overwrite: true
                     })
                 })
 
@@ -319,7 +318,6 @@
                 copiedWebhook,
                 deployLogs,
                 hasRepo,
-                forceOverwrite,
 
                 // SSH Key Generation
                 ssh_email,
