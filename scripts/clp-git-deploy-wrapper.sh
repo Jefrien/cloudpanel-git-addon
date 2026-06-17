@@ -48,9 +48,9 @@ fi
     # start an ssh-agent, add the key, and run the script in that environment
     # so plain git commands work without explicit SSH options.
     if [ -n "$KEY_PATH" ]; then
-        sudo -u "$SITE_USER" bash -c 'eval $(ssh-agent -s) >/dev/null && ssh-add "$1" >/dev/null 2>&1 && bash "$2"' bash "$KEY_PATH" "$SCRIPT_PATH"
+        sudo -u "$SITE_USER" -i bash -c 'eval $(ssh-agent -s) >/dev/null && ssh-add "$1" >/dev/null 2>&1 && bash "$2"' bash "$KEY_PATH" "$SCRIPT_PATH"
     else
-        sudo -u "$SITE_USER" bash "$SCRIPT_PATH"
+        sudo -u "$SITE_USER" -i bash "$SCRIPT_PATH"
     fi
     EXIT_CODE=$?
 
