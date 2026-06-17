@@ -1112,6 +1112,10 @@ EOF\'',
         $existingConfig = $this->getConfig($domainName) ?? [];
         $keyFilename = $existingConfig['filename'] ?? null;
 
+        // Remember whether the deploy path already had a repo before we save.
+        // Deploy script should only run automatically on the first deploy (when cloning).
+        $hadRepo = !empty($deployPath) && $this->hasGitRepo($deployPath, $domainName);
+
         // Save deploy script if provided
         $deployScriptPath = null;
         if ($deployScript && !empty(trim($deployScript))) {
@@ -1203,9 +1207,10 @@ EOF\'',
             }
         }
 
-        // Run the deploy script immediately after save / clone, unless clone was blocked
+        // Run the deploy script only on first deploy (when we just cloned the repo).
+        // Subsequent saves should only update configuration, not redeploy.
         $deployResult = null;
-        if (!empty($deployScriptPath) && !$cloneBlocked) {
+        if (!$hadRepo && !empty($deployScriptPath) && $cloned) {
             $deployResult = $this->runDeployScript($deployScriptPath, $domainName, $keyFilename);
         }
 
@@ -1213,9 +1218,7 @@ EOF\'',
         if ($cloneBlocked) {
             $message = 'Configuration saved. First clone skipped: ' . ($cloneResult['output'] ?? 'deploy path is not empty');
         } elseif ($cloned) {
-            $message = 'Repository cloned and deploy script executed';
-        } elseif ($deployResult && $deployResult['success']) {
-            $message = 'Git configuration saved and deploy script executed';
+            $message = 'Repository cloned' . ($deployResult ? ' and deploy script executed' : '');
         }
 
         return $this->json([
