@@ -1169,6 +1169,9 @@ EOF\'',
             ], 500);
         }
 
+        // Reload the webhook service so it picks up the new hooks file immediately
+        shell_exec('systemctl restart clp-git-webhook.service 2>&1');
+
         // Ensure the SSH key is configured for the Git host so the deploy script can run plain git commands
         if (!empty($keyFilename) && !empty($repoUrl)) {
             $this->updateSshConfig($domainName, $repoUrl, $keyFilename);

@@ -249,6 +249,11 @@ HOOKS
     chown -R clp:clp "$LOGS_DIR"
     chmod 755 "$LOGS_DIR"
 
+    # Reload the webhook service so it picks up any hooks file changes
+    if systemctl is-active --quiet clp-git-webhook.service 2>/dev/null; then
+        systemctl restart clp-git-webhook.service
+    fi
+
     log_ok "Webhook hooks file ready at $WEBHOOK_HOOKS"
 }
 
