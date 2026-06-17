@@ -111,6 +111,10 @@ clp_site_git_save_config:
 clp_site_git_deploy_logs:
   path: /site/{domainName}/git/deploy-logs
   controller: App\Controller\Frontend\GitController::getDeployLogs
+
+clp_site_git_trigger_deploy:
+  path: /site/{domainName}/git/trigger-deploy
+  controller: App\Controller\Frontend\GitController::triggerDeploy
 # === CloudPanel Git Addon routes end ===
 ROUTES
 

@@ -28,6 +28,7 @@
             const deployLogs = ref('')
             const loadingLogs = ref(false)
             const hasRepo = ref({{ hasRepo ? 'true' : 'false' }})
+            const forceOverwrite = ref(false)
 
             // ============================================
             // SSH Key Generation State References
@@ -118,23 +119,27 @@
             }
 
             /**
-             * Trigger a deploy by calling the webhook URL
-             * Uses no-cors mode because the webhook server does not serve CORS headers.
+             * Trigger a deploy by calling the backend trigger-deploy endpoint.
+             * This executes the same wrapper script used by the webhook server,
+             * so deploy logs are written the same way.
              */
             const handleDeploy = async () => {
-                if (!webhookUrl.value) {
-                    showNotification('danger', 'No webhook URL configured')
-                    return
-                }
-
+                loadingSave.value = true
                 try {
-                    await fetch(webhookUrl.value, {
+                    const response = await fetch("{{ path('clp_site_git_trigger_deploy', {'domainName': site.domainName}) }}", {
                         method: 'POST',
-                        mode: 'no-cors'
+                        headers: { 'Content-Type': 'application/json' }
                     })
-                    showNotification('success', 'Deploy triggered. Check the Logs modal for output.')
+                    const data = await response.json()
+                    if (data.success) {
+                        showNotification('success', 'Deploy triggered. Check the Logs modal for output.')
+                    } else {
+                        showNotification('danger', data.message || 'Failed to trigger deploy')
+                    }
                 } catch (err) {
                     showNotification('danger', 'Failed to trigger deploy')
+                } finally {
+                    loadingSave.value = false
                 }
             }
 
@@ -174,7 +179,8 @@
                         repo_url: gitUrl.value,
                         branch: gitBranch.value,
                         deploy_path: deployPath.value,
-                        deploy_script: deployScript.value
+                        deploy_script: deployScript.value,
+                        force_overwrite: forceOverwrite.value
                     })
                 })
 
@@ -313,6 +319,7 @@
                 copiedWebhook,
                 deployLogs,
                 hasRepo,
+                forceOverwrite,
 
                 // SSH Key Generation
                 ssh_email,

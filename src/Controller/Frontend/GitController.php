@@ -742,22 +742,26 @@ EOF\'',
      * @param string $domainName The site domain name
      * @return array ['success' => bool, 'output' => string]
      */
-    private function cloneRepo(string $repoUrl, string $deployPath, string $domainName, ?string $keyFilename = null): array
+    private function cloneRepo(string $repoUrl, string $deployPath, string $domainName, ?string $keyFilename = null, bool $forceOverwrite = false): array
     {
         $this->initConfig($domainName);
 
         if (!$this->isDeployPathEmpty($deployPath, $domainName)) {
-            return [
-                'success' => false,
-                'output' => sprintf(
-                    'Deploy path "%s" already exists and is not empty. ' .
-                    'Choose an empty directory (or a new subdirectory) for the first clone, ' .
-                    'or manually initialize a git repository in the existing directory.',
-                    $deployPath
-                ),
-                'exit_code' => 1,
-                'blocked' => true,
-            ];
+            if ($forceOverwrite) {
+                $this->runAsUser("rm -rf " . escapeshellarg($deployPath));
+            } else {
+                return [
+                    'success' => false,
+                    'output' => sprintf(
+                        'Deploy path "%s" already exists and is not empty. ' .
+                        'Choose an empty directory, enable "Force overwrite", ' .
+                        'or manually initialize a git repository in the existing directory.',
+                        $deployPath
+                    ),
+                    'exit_code' => 1,
+                    'blocked' => true,
+                ];
+            }
         }
 
         // Ensure parent directory exists
@@ -1095,11 +1099,13 @@ EOF\'',
         $branch = $data['branch'] ?? null;
         $deployPath = $data['deploy_path'] ?? null;
         $deployScript = $data['deploy_script'] ?? null;
+        $forceOverwrite = !empty($data['force_overwrite']);
 
         $this->logger->info(sprintf(
-            '[saveGitConfig] domain=%s hasDeployScript=%s',
+            '[saveGitConfig] domain=%s hasDeployScript=%s forceOverwrite=%s',
             $domainName,
-            ($deployScript && !empty(trim($deployScript))) ? 'yes' : 'no'
+            ($deployScript && !empty(trim($deployScript))) ? 'yes' : 'no',
+            $forceOverwrite ? 'yes' : 'no'
         ));
 
         // Get existing config to preserve key file name
@@ -1182,7 +1188,7 @@ EOF\'',
         $cloneResult = null;
         $cloneBlocked = false;
         if (!empty($repoUrl) && !empty($deployPath) && !$this->hasGitRepo($deployPath, $domainName)) {
-            $cloneResult = $this->cloneRepo($repoUrl, $deployPath, $domainName, $keyFilename);
+            $cloneResult = $this->cloneRepo($repoUrl, $deployPath, $domainName, $keyFilename, $forceOverwrite);
             $cloned = $cloneResult['success'];
             $cloneBlocked = !empty($cloneResult['blocked']);
 
@@ -1329,6 +1335,61 @@ EOF\'',
         return $this->json([
             'success' => true,
             'log' => $log
+        ]);
+    }
+
+    /**
+     * Trigger a deploy by executing the deploy wrapper directly
+     *
+     * This endpoint is used by the "Deploy Now" button. It runs the same wrapper
+     * script that the webhook server uses, so deploy logs are written the same way.
+     *
+     * @param Request $request The current request
+     * @param string $domainName The site domain name
+     * @return JsonResponse The deploy result
+     */
+    public function triggerDeploy(Request $request, string $domainName): JsonResponse
+    {
+        $this->initConfig($domainName);
+        $config = $this->getConfig($domainName) ?? [];
+
+        if (empty($config['deploy_script_path'])) {
+            return $this->json([
+                'success' => false,
+                'message' => 'No deploy script configured for this site'
+            ], 400);
+        }
+
+        $siteEntity = $this->siteEntityManager->findOneByDomainName($domainName);
+        if (!$siteEntity) {
+            return $this->json(['success' => false, 'message' => 'Site not found'], 404);
+        }
+
+        $siteUser = $siteEntity->getUser();
+        $keyFilename = $config['key_filename'] ?? null;
+        $keyPath = '';
+        if (!empty($keyFilename)) {
+            $keyPath = $this->sshDir . '/' . preg_replace('/[^a-zA-Z0-9_-]/', '', $keyFilename);
+        }
+
+        $cmd = sprintf(
+            '%s %s %s %s %s',
+            escapeshellarg($this->deployWrapper),
+            escapeshellarg($domainName),
+            escapeshellarg($config['deploy_script_path']),
+            escapeshellarg($siteUser),
+            escapeshellarg($keyPath)
+        );
+
+        $output = [];
+        $exitCode = 0;
+        exec($cmd . ' 2>&1', $output, $exitCode);
+
+        return $this->json([
+            'success' => $exitCode === 0,
+            'message' => $exitCode === 0 ? 'Deploy triggered successfully' : 'Deploy script failed',
+            'output' => implode("\n", $output),
+            'exit_code' => $exitCode,
         ]);
     }
 
