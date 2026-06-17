@@ -443,22 +443,29 @@ cmd_repair() {
     local quiet=false
     [ "$1" = "--quiet" ] && quiet=true
 
-    # Quick idempotency check - exit fast if already patched
+    if [ ! -d "$ADDON_DIR" ]; then
+        $quiet || log_err "Addon source not found at $ADDON_DIR - cannot repair."
+        return 1
+    fi
+
+    # If everything is in place, only re-apply permissions and clear cache.
+    # This fixes webhook hooks/log directory ownership/permissions issues
+    # without re-running the full patch sequence.
     if is_patched && \
        [ -f "$CLP_CONTROLLERS/GitController.php" ] && \
        [ -f "$CLP_TEMPLATES/git.html.twig" ] && \
        [ -d "$CLP_TEMPLATES/Partial/Git" ] && \
        is_webhook_installed; then
-        $quiet || log_ok "All patches intact, nothing to repair."
+        $quiet || echo "All patches intact, re-applying permissions..."
+        copy_files
+        clear_cache
+        install_webhook_hooks
+        install_webhook_service
+        $quiet || log_ok "Permissions re-applied."
         return 0
     fi
 
     $quiet || echo "Repairing CloudPanel Git Addon..."
-
-    if [ ! -d "$ADDON_DIR" ]; then
-        $quiet || log_err "Addon source not found at $ADDON_DIR - cannot repair."
-        return 1
-    fi
 
     copy_files
     patch_tab_container
