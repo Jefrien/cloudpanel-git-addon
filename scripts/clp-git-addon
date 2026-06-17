@@ -283,7 +283,7 @@ After=network.target
 Type=simple
 User=clp
 Group=clp
-ExecStart=$WEBHOOK_BIN -hooks $WEBHOOK_HOOKS -port $WEBHOOK_PORT -hotreload -nopanic
+ExecStart=$WEBHOOK_BIN -hooks $WEBHOOK_HOOKS -port $WEBHOOK_PORT -hotreload -nopanic -log-file $LOGS_DIR/webhook.log
 Restart=on-failure
 
 [Install]

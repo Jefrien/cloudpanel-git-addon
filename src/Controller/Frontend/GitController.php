@@ -1295,9 +1295,9 @@ EOF\'',
     /**
      * Retrieve deploy logs for a site
      *
-     * Reads the captured stdout/stderr of the last deploy script executions
-     * for the specified domain. Logs are written by the deploy wrapper script
-     * invoked by the webhook server.
+     * Reads the webhook server's log file and extracts the entries that belong
+     * to the specified domain. Each webhook request has a unique request id, so
+     * we collect every line that shares the request ids matched to this domain.
      *
      * @param Request $request The HTTP request
      * @param string $domainName The site domain name
@@ -1316,9 +1316,45 @@ EOF\'',
             ]);
         }
 
-        $logFile = $this->logsDir . '/deploy-' . $domainName . '.log';
+        $webhookLogFile = $this->logsDir . '/webhook.log';
+        $wrapperLogFile = $this->logsDir . '/deploy-' . $domainName . '.log';
+        $logEntries = [];
 
-        if (!file_exists($logFile) || !is_readable($logFile)) {
+        // Primary source: webhook server log file
+        if (file_exists($webhookLogFile) && is_readable($webhookLogFile)) {
+            $lines = file($webhookLogFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            $requestIds = [];
+
+            foreach ($lines as $line) {
+                if (preg_match('/\[([a-f0-9]+)\]\s+' . preg_quote($domainName, '/') . '\s+got matched/', $line, $matches)) {
+                    $requestIds[] = $matches[1];
+                }
+            }
+
+            $requestIds = array_unique($requestIds);
+
+            if (!empty($requestIds)) {
+                foreach ($lines as $line) {
+                    foreach ($requestIds as $requestId) {
+                        if (strpos($line, '[' . $requestId . ']') !== false) {
+                            $logEntries[] = $line;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: wrapper log file (used by trigger-deploy endpoint)
+        if (empty($logEntries) && file_exists($wrapperLogFile) && is_readable($wrapperLogFile)) {
+            $logEntries[] = '=== Wrapper log fallback ===';
+            $wrapperLines = file($wrapperLogFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            foreach ($wrapperLines as $line) {
+                $logEntries[] = $line;
+            }
+        }
+
+        if (empty($logEntries)) {
             return $this->json([
                 'success' => true,
                 'log' => '',
@@ -1326,26 +1362,18 @@ EOF\'',
             ]);
         }
 
-        $log = file_get_contents($logFile);
-
-        if ($log === false) {
-            return $this->json([
-                'success' => false,
-                'message' => 'Could not read deploy log'
-            ], 500);
-        }
-
         return $this->json([
             'success' => true,
-            'log' => $log
+            'log' => implode("\n", $logEntries)
         ]);
     }
 
     /**
-     * Trigger a deploy by executing the deploy wrapper directly
+     * Trigger a deploy by calling the local webhook server
      *
-     * This endpoint is used by the "Deploy Now" button. It runs the same wrapper
-     * script that the webhook server uses, so deploy logs are written the same way.
+     * This endpoint is used by the "Deploy Now" button. It invokes the same
+     * webhook URL that external services use, so the deploy is captured in the
+     * same webhook log file.
      *
      * @param Request $request The current request
      * @param string $domainName The site domain name
@@ -1363,36 +1391,24 @@ EOF\'',
             ], 400);
         }
 
-        $siteEntity = $this->siteEntityManager->findOneByDomainName($domainName);
-        if (!$siteEntity) {
-            return $this->json(['success' => false, 'message' => 'Site not found'], 404);
+        $webhookUrl = $config['webhook_url'] ?? null;
+        if (empty($webhookUrl)) {
+            return $this->json([
+                'success' => false,
+                'message' => 'No webhook URL configured'
+            ], 400);
         }
 
-        $siteUser = $siteEntity->getUser();
-        $keyFilename = $config['key_filename'] ?? null;
-        $keyPath = '';
-        if (!empty($keyFilename)) {
-            $keyPath = $this->sshDir . '/' . preg_replace('/[^a-zA-Z0-9_-]/', '', $keyFilename);
+        $output = shell_exec('curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" -X POST ' . escapeshellarg($webhookUrl) . ' 2>&1');
+        $httpCode = 0;
+        if (preg_match('/HTTP_CODE:(\d+)/', $output, $matches)) {
+            $httpCode = (int) $matches[1];
         }
-
-        $cmd = sprintf(
-            '%s %s %s %s %s',
-            escapeshellarg($this->deployWrapper),
-            escapeshellarg($domainName),
-            escapeshellarg($config['deploy_script_path']),
-            escapeshellarg($siteUser),
-            escapeshellarg($keyPath)
-        );
-
-        $output = [];
-        $exitCode = 0;
-        exec($cmd . ' 2>&1', $output, $exitCode);
 
         return $this->json([
-            'success' => $exitCode === 0,
-            'message' => $exitCode === 0 ? 'Deploy triggered successfully' : 'Deploy script failed',
-            'output' => implode("\n", $output),
-            'exit_code' => $exitCode,
+            'success' => $httpCode >= 200 && $httpCode < 300,
+            'message' => ($httpCode >= 200 && $httpCode < 300) ? 'Deploy triggered successfully' : 'Webhook returned HTTP ' . $httpCode,
+            'http_code' => $httpCode,
         ]);
     }
 
