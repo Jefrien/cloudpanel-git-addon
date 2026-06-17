@@ -180,7 +180,8 @@ class GitController extends Controller
             ];
 
             if (!empty($keyFilename)) {
-                $arguments[] = ['source' => 'string', 'name' => $keyFilename];
+                $keyPath = $this->sshDir . '/' . preg_replace('/[^a-zA-Z0-9_-]/', '', $keyFilename);
+                $arguments[] = ['source' => 'string', 'name' => $keyPath];
             }
 
             $hookEntry = [

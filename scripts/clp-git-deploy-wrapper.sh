@@ -12,10 +12,10 @@ set -e
 DOMAIN="${1:-}"
 SCRIPT_PATH="${2:-}"
 SITE_USER="${3:-}"
-KEY_FILENAME="${4:-}"
+KEY_PATH="${4:-}"
 
 if [ -z "$DOMAIN" ] || [ -z "$SCRIPT_PATH" ] || [ -z "$SITE_USER" ]; then
-    echo "Usage: $0 <domain> <deploy-script-path> <site-user> [key-filename]" >&2
+    echo "Usage: $0 <domain> <deploy-script-path> <site-user> [key-path]" >&2
     exit 1
 fi
 
@@ -35,7 +35,7 @@ fi
     echo "Domain: $DOMAIN"
     echo "Script: $SCRIPT_PATH"
     echo "User: $SITE_USER"
-    echo "Key: $KEY_FILENAME"
+    echo "Key: $KEY_PATH"
     echo ""
 
     if [ ! -f "$SCRIPT_PATH" ]; then
@@ -44,15 +44,11 @@ fi
         exit 1
     fi
 
-    # Run the deploy script as the site user. If a key filename is provided,
+    # Run the deploy script as the site user. If a key path is provided,
     # start an ssh-agent, add the key, and run the script in that environment
     # so plain git commands work without explicit SSH options.
-    if [ -n "$KEY_FILENAME" ]; then
-        sudo -u "$SITE_USER" bash -c "
-            eval \$(ssh-agent -s) >/dev/null
-            ssh-add \"\$HOME/.ssh/$KEY_FILENAME\" >/dev/null 2>&1
-            bash \"$SCRIPT_PATH\"
-        "
+    if [ -n "$KEY_PATH" ]; then
+        sudo -u "$SITE_USER" bash -c 'eval $(ssh-agent -s) >/dev/null && ssh-add "$1" >/dev/null 2>&1 && bash "$2"' bash "$KEY_PATH" "$SCRIPT_PATH"
     else
         sudo -u "$SITE_USER" bash "$SCRIPT_PATH"
     fi
