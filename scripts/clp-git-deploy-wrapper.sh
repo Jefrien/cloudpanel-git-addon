@@ -5,15 +5,17 @@ set -e
 # https://github.com/Jefrien/cloudpanel-git-addon
 #
 # This script is invoked by the webhook server (running as the clp user).
-# It runs the site's deploy script as the site user and captures stdout/stderr
-# to a per-site log file owned by clp.
+# It runs the site's deploy script as the site user, optionally under an
+# ssh-agent with the site's SSH key, and captures stdout/stderr to a per-site
+# log file owned by clp.
 
 DOMAIN="${1:-}"
 SCRIPT_PATH="${2:-}"
 SITE_USER="${3:-}"
+KEY_FILENAME="${4:-}"
 
 if [ -z "$DOMAIN" ] || [ -z "$SCRIPT_PATH" ] || [ -z "$SITE_USER" ]; then
-    echo "Usage: $0 <domain> <deploy-script-path> <site-user>" >&2
+    echo "Usage: $0 <domain> <deploy-script-path> <site-user> [key-filename]" >&2
     exit 1
 fi
 
@@ -33,6 +35,7 @@ fi
     echo "Domain: $DOMAIN"
     echo "Script: $SCRIPT_PATH"
     echo "User: $SITE_USER"
+    echo "Key: $KEY_FILENAME"
     echo ""
 
     if [ ! -f "$SCRIPT_PATH" ]; then
@@ -41,8 +44,18 @@ fi
         exit 1
     fi
 
-    # Run the deploy script as the site user so file permissions are correct
-    sudo -u "$SITE_USER" bash "$SCRIPT_PATH" 2>&1
+    # Run the deploy script as the site user. If a key filename is provided,
+    # start an ssh-agent, add the key, and run the script in that environment
+    # so plain git commands work without explicit SSH options.
+    if [ -n "$KEY_FILENAME" ]; then
+        sudo -u "$SITE_USER" bash -c "
+            eval \$(ssh-agent -s) >/dev/null
+            ssh-add \"\$HOME/.ssh/$KEY_FILENAME\" >/dev/null 2>&1
+            bash \"$SCRIPT_PATH\"
+        "
+    else
+        sudo -u "$SITE_USER" bash "$SCRIPT_PATH"
+    fi
     EXIT_CODE=$?
 
     echo ""

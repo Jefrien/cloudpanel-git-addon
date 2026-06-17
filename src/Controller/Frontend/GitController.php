@@ -140,7 +140,7 @@ class GitController extends Controller
      * @param string|null $deployScriptPath Path to the deploy script, or null to remove
      * @return void
      */
-    private function updateWebhookHooks(string $domainName, ?string $deployScriptPath): array
+    private function updateWebhookHooks(string $domainName, ?string $deployScriptPath, ?string $keyFilename = null): array
     {
         $siteEntity = $this->siteEntityManager->findOneByDomainName($domainName);
         $siteUser = $siteEntity->getUser();
@@ -173,15 +173,21 @@ class GitController extends Controller
                 }
             }
 
+            $arguments = [
+                ['source' => 'string', 'name' => $domainName],
+                ['source' => 'string', 'name' => $deployScriptPath],
+                ['source' => 'string', 'name' => $siteUser],
+            ];
+
+            if (!empty($keyFilename)) {
+                $arguments[] = ['source' => 'string', 'name' => $keyFilename];
+            }
+
             $hookEntry = [
                 'id' => $domainName,
                 'execute-command' => $this->deployWrapper,
                 'command-working-directory' => dirname($deployScriptPath),
-                'pass-arguments-to-command' => [
-                    ['source' => 'string', 'name' => $domainName],
-                    ['source' => 'string', 'name' => $deployScriptPath],
-                    ['source' => 'string', 'name' => $siteUser],
-                ],
+                'pass-arguments-to-command' => $arguments,
                 'response-message' => 'Deploy triggered for ' . $domainName,
             ];
 
@@ -670,6 +676,31 @@ EOF\'',
     }
 
     /**
+     * Wrap a shell command so it runs inside an ssh-agent with the site's key
+     *
+     * This lets plain `git` commands authenticate without explicit SSH flags.
+     *
+     * @param string $command The command to wrap
+     * @param string|null $keyFilename The SSH key filename (without path)
+     * @return string The wrapped command
+     */
+    private function wrapWithSshAgent(string $command, ?string $keyFilename): string
+    {
+        if (empty($keyFilename)) {
+            return $command;
+        }
+
+        $sanitizedKey = preg_replace('/[^a-zA-Z0-9_-]/', '', $keyFilename);
+        $keyPath = $this->sshDir . '/' . $sanitizedKey;
+
+        return sprintf(
+            'bash -c \'eval $(ssh-agent -s) >/dev/null && ssh-add %s >/dev/null 2>&1 && %s\'',
+            escapeshellarg($keyPath),
+            $command
+        );
+    }
+
+    /**
      * Check whether the deploy path already contains a Git repository
      *
      * @param string $deployPath The path to check
@@ -710,7 +741,7 @@ EOF\'',
      * @param string $domainName The site domain name
      * @return array ['success' => bool, 'output' => string]
      */
-    private function cloneRepo(string $repoUrl, string $deployPath, string $domainName): array
+    private function cloneRepo(string $repoUrl, string $deployPath, string $domainName, ?string $keyFilename = null): array
     {
         $this->initConfig($domainName);
 
@@ -732,12 +763,17 @@ EOF\'',
         $parentDir = dirname($deployPath);
         $this->runAsUser("mkdir -p " . escapeshellarg($parentDir));
 
-        $cmd = sprintf(
-            'sudo -u %s bash -c \'cd %s && git clone %s %s 2>&1\'',
-            escapeshellarg($this->siteUser),
+        $gitCmd = sprintf('cd %s && git clone %s %s 2>&1',
             escapeshellarg($parentDir),
             escapeshellarg($repoUrl),
             escapeshellarg(basename($deployPath))
+        );
+        $gitCmd = $this->wrapWithSshAgent($gitCmd, $keyFilename);
+
+        $cmd = sprintf(
+            'sudo -u %s %s',
+            escapeshellarg($this->siteUser),
+            $gitCmd
         );
 
         $exitCode = 0;
@@ -759,18 +795,23 @@ EOF\'',
      * @param string $domainName The site domain name
      * @return array ['success' => bool, 'output' => string, 'exit_code' => int]
      */
-    private function runDeployScript(string $deployScriptPath, string $domainName): array
+    private function runDeployScript(string $deployScriptPath, string $domainName, ?string $keyFilename = null): array
     {
         $this->initConfig($domainName);
 
-        $cmd = sprintf(
-            'sudo -u %s bash -c \'cd %s && %s 2>&1\'',
-            escapeshellarg($this->siteUser),
+        $deployCmd = sprintf('cd %s && %s 2>&1',
             escapeshellarg(dirname($deployScriptPath)),
             escapeshellarg($deployScriptPath)
         );
+        $deployCmd = $this->wrapWithSshAgent($deployCmd, $keyFilename);
 
-        exec($cmd . ' 2>&1', $outputArray, $exitCode);
+        $cmd = sprintf(
+            'sudo -u %s %s',
+            escapeshellarg($this->siteUser),
+            $deployCmd
+        );
+
+        exec($cmd, $outputArray, $exitCode);
 
         return [
             'success' => $exitCode === 0,
@@ -1102,7 +1143,7 @@ EOF\'',
         $this->saveConfig($config, $domainName);
 
         // Update global webhook hooks file so the webhook server knows about this site
-        $hooksResult = $this->updateWebhookHooks($domainName, $deployScriptPath);
+        $hooksResult = $this->updateWebhookHooks($domainName, $deployScriptPath, $keyFilename);
 
         if (!$hooksResult['success']) {
             $debugInfo = $hooksResult['debug'] ?? [];
@@ -1137,7 +1178,7 @@ EOF\'',
         $cloneResult = null;
         $cloneBlocked = false;
         if (!empty($repoUrl) && !empty($deployPath) && !$this->hasGitRepo($deployPath, $domainName)) {
-            $cloneResult = $this->cloneRepo($repoUrl, $deployPath, $domainName);
+            $cloneResult = $this->cloneRepo($repoUrl, $deployPath, $domainName, $keyFilename);
             $cloned = $cloneResult['success'];
             $cloneBlocked = !empty($cloneResult['blocked']);
 
@@ -1155,7 +1196,7 @@ EOF\'',
         // Run the deploy script immediately after save / clone, unless clone was blocked
         $deployResult = null;
         if (!empty($deployScriptPath) && !$cloneBlocked) {
-            $deployResult = $this->runDeployScript($deployScriptPath, $domainName);
+            $deployResult = $this->runDeployScript($deployScriptPath, $domainName, $keyFilename);
         }
 
         $message = 'Git configuration saved successfully';
