@@ -633,19 +633,40 @@ EOF\'',
             $newConfig = rtrim($existingConfig) . "\n\n" . $entry;
         }
 
-        // Write the config file as the site user via a here-document
-        $writeCmd = sprintf(
-            'sudo -u %s bash -c \'cat > %s << EOF\n%s\nEOF\'',
+        // Ensure .ssh directory exists
+        if (!is_dir($this->sshDir)) {
+            $mkdirCmd = sprintf(
+                'sudo -u %s mkdir -p %s && sudo -u %s chmod 700 %s',
+                escapeshellarg($this->siteUser),
+                escapeshellarg($this->sshDir),
+                escapeshellarg($this->siteUser),
+                escapeshellarg($this->sshDir)
+            );
+            shell_exec($mkdirCmd . ' 2>&1');
+        }
+
+        // Write the config file using a temporary file to avoid shell quoting issues
+        $tempFile = tempnam(sys_get_temp_dir(), 'ssh-config-');
+        file_put_contents($tempFile, $newConfig);
+        chmod($tempFile, 0644);
+
+        $copyCmd = sprintf(
+            'sudo -u %s cp %s %s && sudo -u %s chmod 600 %s',
             escapeshellarg($this->siteUser),
+            escapeshellarg($tempFile),
             escapeshellarg($configFile),
-            $newConfig
+            escapeshellarg($this->siteUser),
+            escapeshellarg($configFile)
         );
-        shell_exec($writeCmd . ' 2>&1');
+        $output = shell_exec($copyCmd . ' 2>&1');
+        unlink($tempFile);
 
-        // Ensure correct permissions
-        $this->runAsUser("chmod 600 " . escapeshellarg($configFile));
+        if (!$this->fileExistsAsUser($configFile)) {
+            $this->logger->error(sprintf('[updateSshConfig] Failed to write SSH config: %s', trim($output ?? '')));
+            return false;
+        }
 
-        return $this->fileExistsAsUser($configFile);
+        return true;
     }
 
     /**
