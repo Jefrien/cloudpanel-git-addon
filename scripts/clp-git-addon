@@ -281,8 +281,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=clp
-Group=clp
+User=root
+Group=root
 ExecStart=$WEBHOOK_BIN -hooks $WEBHOOK_HOOKS -port $WEBHOOK_PORT -hotreload -nopanic -logfile $LOGS_DIR/webhook.log
 Restart=on-failure
 

@@ -4,7 +4,7 @@ set -e
 # CloudPanel Git Addon - Deploy wrapper with logging
 # https://github.com/Jefrien/cloudpanel-git-addon
 #
-# This script is invoked by the webhook server (running as the clp user).
+# This script is invoked by the webhook server (running as root or the clp user).
 # It runs the site's deploy script as the site user, optionally under an
 # ssh-agent with the site's SSH key, and captures stdout/stderr to a per-site
 # log file owned by clp.
@@ -24,6 +24,17 @@ LOG_FILE="$LOG_DIR/deploy-${DOMAIN}.log"
 
 # Ensure the log directory exists and is writable by the clp user
 mkdir -p "$LOG_DIR"
+
+# Run a command as the site user. When invoked as root (the default for the
+# webhook service) use runuser, which does not require sudo privileges.
+# When invoked as a non-root user fall back to sudo.
+run_as_site_user() {
+    if [ "$(id -u)" -eq 0 ]; then
+        runuser -u "$SITE_USER" -- "$@"
+    else
+        sudo -u "$SITE_USER" -- "$@"
+    fi
+}
 
 # Rotate log if it's larger than 1MB
 if [ -f "$LOG_FILE" ] && [ "$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)" -gt 1048576 ]; then
@@ -48,9 +59,9 @@ fi
     # start an ssh-agent, add the key, and run the script in that environment
     # so plain git commands work without explicit SSH options.
     if [ -n "$KEY_PATH" ]; then
-        sudo -u "$SITE_USER" -i bash -c 'eval $(ssh-agent -s) >/dev/null && ssh-add "$1" >/dev/null 2>&1 && bash "$2"' bash "$KEY_PATH" "$SCRIPT_PATH"
+        run_as_site_user bash -l -c 'eval $(ssh-agent -s) >/dev/null && ssh-add "$1" >/dev/null 2>&1 && bash "$2"' bash "$KEY_PATH" "$SCRIPT_PATH"
     else
-        sudo -u "$SITE_USER" -i bash "$SCRIPT_PATH"
+        run_as_site_user bash -l "$SCRIPT_PATH"
     fi
     EXIT_CODE=$?
 
